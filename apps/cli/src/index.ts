@@ -1,9 +1,12 @@
 #!/usr/bin/env bun
 
-import { GATE_TODO } from "@hamsterwheel/gate";
-import { SANDBOX_TODO } from "@hamsterwheel/sandbox";
+import { mergeDecision } from "@hamsterwheel/gate";
+import { buildSandboxArgs } from "@hamsterwheel/sandbox";
 
 import pkg from "../package.json";
+
+/** "ready" once a package's real export links from the workspace, else "missing". */
+const wired = (exported: unknown): string => (typeof exported === "function" ? "ready" : "missing");
 
 /** Subcommands the wheel will eventually spin. None are live yet. */
 export const PLANNED_COMMANDS = ["plan", "once", "run", "triage", "prune"] as const;
@@ -35,8 +38,8 @@ Flags:
   --version, -v   print the version and exit
   --help,    -h   show this help
 
-status: freshly bootstrapped, nothing spins yet.
-engines warming up -> sandbox:${SANDBOX_TODO} gate:${GATE_TODO}`);
+status: sandbox + gate ported; the loop driver lands next.
+engines wired -> sandbox:${wired(buildSandboxArgs)} gate:${wired(mergeDecision)}`);
 }
 
 /**

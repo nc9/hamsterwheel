@@ -11,9 +11,9 @@ hamsterwheel is two pieces that let a coding agent grind through a backlog unatt
 
 ## Status
 
-**Freshly bootstrapped. Nothing works yet.** 🐹
+**Sandbox + gate are ported and tested. The loop driver is next.** 🐹
 
-The wheel is installed, the hamster has been hired, but no one has taught it to run. Every subcommand currently answers with a polite "not yet implemented" and goes back to sleep. Come back after a few more commits.
+The two load-bearing pieces are in place: `@hamsterwheel/sandbox` (the OS-isolation docker runner, image, and entrypoint) and `@hamsterwheel/gate` (the pure, heavily-tested merge-gate kit). The `hamsterwheel` CLI links both, but the loop driver that actually spins the wheel — claim an issue, run a headless session, gate the PR — isn't wired yet, so every subcommand still answers "not yet implemented". Come back after a few more commits.
 
 ## Workspace layout
 

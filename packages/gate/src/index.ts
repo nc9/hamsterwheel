@@ -28,6 +28,13 @@ export {
   classifyImplement,
 } from "./outcome.ts";
 export {
+  type ImplementPromptOptions,
+  type RubricPromptOptions,
+  RESOLVED_SIGNAL,
+  buildImplementPrompt,
+  buildRubricPrompt,
+} from "./prompts.ts";
+export {
   type WipBranchInfo,
   type PruneAction,
   type PruneDecision,

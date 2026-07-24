@@ -1,0 +1,22 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - run: bun install --frozen-lockfile
+      - run: bun test
+      - run: bun run lint
+      - name: typecheck apps/cli
+        run: cd apps/cli && bunx tsgo --noEmit
+      - name: typecheck packages/sandbox
+        run: cd packages/sandbox && bunx tsgo --noEmit
+      - name: typecheck packages/gate
+        run: cd packages/gate && bunx tsgo --noEmit

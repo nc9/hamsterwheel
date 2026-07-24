@@ -1,0 +1,15 @@
+{
+  "name": "hamsterwheel",
+  "version": "0.0.1",
+  "bin": {
+    "hamsterwheel": "./src/index.ts"
+  },
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsgo --noEmit"
+  },
+  "dependencies": {
+    "@hamsterwheel/gate": "workspace:*",
+    "@hamsterwheel/sandbox": "workspace:*"
+  }
+}

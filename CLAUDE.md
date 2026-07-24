@@ -46,20 +46,25 @@ Extracted from a production loop that ran overnight autonomous implementation wa
 
 ### Operating at scale (parallel waves)
 - Parallel agents idle silently after opening a PR — they don't poll CI. Never re-ping an idle agent; reconcile from repo state (branch sha moved? PR exists? checks green?).
-- N lanes polling GitHub exhaust the GraphQL quota (~20 min lockout). REST-first for PR ops in anything parallel; batch board/GraphQL mutations to start/end sweeps.
+- N lanes polling GitHub exhaust the GraphQL quota (~20 min lockout). GraphQL and REST "core" are separate per-token pools, and `gh api rate_limit` reads both for free; everything PR-shaped (create, checks, comments, merge) has a REST equivalent. REST-first for PR ops in anything parallel; batch board mutations (Projects v2 is GraphQL-only) to start/end sweeps.
 - Parallel branches off the same base collide on generated sequence numbers (e.g. migration files). Whoever merges second regenerates — never hand-renumber.
 - Stacked PRs: merging a parent with `--delete-branch` auto-closes its children. Merge children first, or retarget before the parent merges.
 - Before declaring a merge train done, the open-PR count must be zero. Phase lists drift; the zero check doesn't.
 
+### Session quota + recovery
+- Headless agent sessions can share the operator's subscription session quota (no separate API key → same limit as interactive use). ~10 big-model implement sessions per wave was the practical ceiling; schedule wave launches just after the quota reset so the window belongs to the loop, and priority-order the queue so the important work lands before the quota dies.
+- Quota exhaustion has a signature: a rapid burst of instant session failures (~1/min, tiny transcripts) — nothing like a real failure (one issue, huge transcript). On a "no PR url" failure, read the captured session stdout FIRST; if it's the session-limit message, the fix is re-queue + relaunch after reset, not debugging the issue.
+- Driver killed mid-gate with a PR already open: do NOT restart the loop for that issue — re-running skips In Review items, and forcing it spawns a fresh implement session that redoes finished work or collides with the open branch. Finish the gate BY HAND in the loop's exact order: criteria vs diff → CI green → migration guard on changed files → review settled → merge → set the board Done yourself → worktree/branch cleanup (salvage first if dirty).
+
 ### Model policy
 - Route small mechanical work to cheap models, anything with design or blast-radius risk to big ones. Per-issue override labels must be validated — an invalid value falls back to the heuristic and must never reach the spawn (it would read as a generic session failure).
 
+Target driver architecture: `docs/design.md`.
+
 ## What's next
 
-1. Port the sandbox runner into `packages/sandbox`: pure fns + docker image + tests. ← in progress
-2. Port the gate kit into `packages/gate`: pure fns + tests. ← in progress
-3. Config-driven driver in `apps/cli`: `hamsterwheel.toml` (repo, project board, review bot, migration path regex, allowed tools, branch prefix, install cmd, model policy) behind `plan` / `once` / `run` / `triage` / `prune`.
-4. Board bootstrap (`hamsterwheel init`): idempotent GitHub Projects v2 provisioning (Status options, Owner, Blocked reason).
-5. Sandbox follow-ups: deny-by-default egress proxy, per-run GitHub App token minting, hermetic in-container clone.
-6. Wave mode: parallel lanes encoding the at-scale lessons above.
-7. npm publish decision (`hamsterwheel` is free on npm; `@hamsterwheel/*` scope needs the org).
+1. Config-driven driver in `apps/cli`: `hamsterwheel.toml` (repo, project board, review bot, migration path regex, allowed tools, branch prefix, install cmd, model policy) behind `plan` / `once` / `run` / `triage` / `prune`. See `docs/design.md`.
+2. Board bootstrap (`hamsterwheel init`): idempotent GitHub Projects v2 provisioning (Status options, Owner, Blocked reason).
+3. Sandbox follow-ups: deny-by-default egress proxy, per-run GitHub App token minting, hermetic in-container clone.
+4. Wave mode: parallel lanes encoding the at-scale lessons above.
+5. npm publish decision (`hamsterwheel` is free on npm; `@hamsterwheel/*` scope needs the org).

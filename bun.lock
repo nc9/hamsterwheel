@@ -27,6 +27,10 @@
       "name": "@hamsterwheel/gate",
       "version": "0.0.1",
     },
+    "packages/runners": {
+      "name": "@hamsterwheel/runners",
+      "version": "0.0.1",
+    },
     "packages/sandbox": {
       "name": "@hamsterwheel/sandbox",
       "version": "0.0.1",
@@ -34,6 +38,8 @@
   },
   "packages": {
     "@hamsterwheel/gate": ["@hamsterwheel/gate@workspace:packages/gate"],
+
+    "@hamsterwheel/runners": ["@hamsterwheel/runners@workspace:packages/runners"],
 
     "@hamsterwheel/sandbox": ["@hamsterwheel/sandbox@workspace:packages/sandbox"],
 

@@ -23,6 +23,13 @@
         "@hamsterwheel/sandbox": "workspace:*",
       },
     },
+    "packages/config": {
+      "name": "@hamsterwheel/config",
+      "version": "0.0.1",
+      "dependencies": {
+        "@hamsterwheel/runners": "workspace:*",
+      },
+    },
     "packages/gate": {
       "name": "@hamsterwheel/gate",
       "version": "0.0.1",
@@ -40,6 +47,8 @@
     },
   },
   "packages": {
+    "@hamsterwheel/config": ["@hamsterwheel/config@workspace:packages/config"],
+
     "@hamsterwheel/gate": ["@hamsterwheel/gate@workspace:packages/gate"],
 
     "@hamsterwheel/runners": ["@hamsterwheel/runners@workspace:packages/runners"],

@@ -1,0 +1,87 @@
+# hamsterwheel.toml — the loop's only repo-specific knowledge.
+# Copy to `hamsterwheel.toml` at your repo root (or let `hamsterwheel init` write it) and edit.
+# Every value below is shown with its default; only `repo`, `migration_path_regex` and a project
+# reference are required.
+
+# REQUIRED. The repo whose issues the loop works.
+repo = "acme/backend"
+
+# REQUIRED. Paths that mean "this PR changes a schema migration" → never auto-merged, parked as
+# Blocked: needs-prod-migration for a human. Case-insensitive. Err wide: a false positive just
+# routes a PR to a human, a false negative auto-deploys code ahead of the schema.
+migration_path_regex = "(^|/)(migrations|drizzle)/"
+
+base_branch = "main"
+branch_prefix = "loop"          # branches are <prefix>/<issue>-<slug>
+criteria_heading = "Acceptance Criteria"
+install_cmd = "bun install"     # run in each fresh worktree before the implement session
+# smoke_cmd = "bun run smoke"   # optional post-merge check; failures notify, never auto-rollback
+
+# Extra repos whose open issues `triage --sync` folds onto the board (e.g. a public triage inbox).
+source_repos = ["acme/backend"]
+
+# ---- control plane: GitHub Projects v2 -------------------------------------------------------
+[project]
+# number OR title is required. `hamsterwheel init` fills `number` in after provisioning the board.
+number = 3
+title = "Loop"
+# owner = "acme"                # defaults to the owner segment of `repo`
+
+# Board field + option NAMES. Nothing is hardcoded — point these at whatever your board already uses.
+[board]
+status_field = "Status"
+owner_field = "Owner"                     # text field; the atomic claim writes the run id here
+blocked_reason_field = "Blocked reason"
+
+[board.status]
+draft = "Draft"
+ready = "Ready"
+in_progress = "In Progress"
+in_review = "In Review"
+blocked = "Blocked"
+done = "Done"
+
+[board.blocked_reasons]
+needs_criteria = "needs-criteria"
+needs_prod_migration = "needs-prod-migration"
+needs_decision = "needs-decision"
+dep_open = "dep-open"
+ci_red = "ci-red"
+rubric_fail = "rubric-fail"
+
+# ---- review gate -----------------------------------------------------------------------------
+[review]
+bot = "claude[bot]"             # login whose PR review the merge gate reads
+# Lines matching this in the bot's review body BLOCK the merge. Nits/low/medium don't; high/critical do.
+blocking_severity_regex = "\\(\\s*(high|critical)\\s*\\)|🔴|\\[(critical|high)\\]|severity:\\s*(high|critical)"
+
+# ---- runner policy ---------------------------------------------------------------------------
+# Defaults per role. Per-issue `loop:*` labels override any axis (see the issue contract in your
+# CLAUDE.md / AGENTS.md). strong_model/cheap_model feed the built-in heuristic when no model is pinned:
+# P0/P1 or size >= M → strong; XS or docs/test/chore/style/ci-shaped → cheap.
+[runners.implement]
+runner = "claude"               # claude | codex | opencode
+strong_model = "opus"
+cheap_model = "sonnet"
+# model = "claude-opus-5"       # pin a model and the heuristic is skipped
+effort = "high"                 # claude: low|medium|high|xhigh|max · codex: minimal|low|medium|high · opencode: minimal|low|medium|high|max
+
+[runners.review]
+runner = "claude"
+strong_model = "opus"
+cheap_model = "sonnet"
+effort = "high"
+
+# ---- session limits --------------------------------------------------------------------------
+# Scoped tool allow-list for a claude implement session. No blanket Bash(*) and no arbitrary-read
+# shells. This is defense-in-depth, NOT isolation — the sandbox is the boundary.
+allowed_tools = [
+  "Edit", "Read", "Write", "Glob", "Grep", "TodoWrite",
+  "Bash(git:*)", "Bash(gh:*)", "Bash(bun:*)",
+]
+
+session_timeout_ms = 3600000    # kill a stalled implement session after 60m
+ci_timeout_ms = 900000          # give up waiting for checks after 15m (→ Blocked: ci-red)
+max_diff_bytes = 60000          # diff slice handed to the rubric grader
+max_iterations = 50             # `run` backstop: never loop forever
+# worktree_root = "~/.hamsterwheel/worktrees"

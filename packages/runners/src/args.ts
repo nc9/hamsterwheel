@@ -66,7 +66,21 @@ export const buildRunnerArgs = (spec: RunnerSpec): string[] => {
   }
 
   if (spec.runner === "codex") {
-    const argv = ["codex", "exec", spec.prompt, "--json"];
+    // UNATTENDED CONSENT (load-bearing): a harness-level tool allow-list does NOT cover codex's OWN
+    // approval elicitation for command execution. Overnight review sessions stalled for hours on that
+    // second prompt with nobody at the keyboard. Both layers must be handled, so the approval policy and
+    // the sandbox mode are baked into the argv here rather than left as something a caller remembers.
+    // read-only for the grader (it must not touch the tree it grades), workspace-write to implement.
+    const argv = [
+      "codex",
+      "exec",
+      spec.prompt,
+      "--json",
+      "-c",
+      'approval_policy="never"',
+      "--sandbox",
+      readOnly ? "read-only" : "workspace-write",
+    ];
     if (model) argv.push("-m", model);
     // Reasoning effort rides the generic config override, not a dedicated flag.
     if (effort) argv.push("-c", `model_reasoning_effort=${effort}`);
@@ -75,7 +89,8 @@ export const buildRunnerArgs = (spec: RunnerSpec): string[] => {
     return argv;
   }
 
-  const argv = ["opencode", "run", spec.prompt, "--format", "json"];
+  // Same consent problem, opencode's own flag: without --auto it blocks on permission prompts.
+  const argv = ["opencode", "run", spec.prompt, "--format", "json", "--auto"];
   if (model) argv.push("-m", model);
   if (effort) argv.push("--variant", effort);
   return argv;

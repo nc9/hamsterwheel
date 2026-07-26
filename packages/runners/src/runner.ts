@@ -14,9 +14,9 @@ export type RunnerRole = "implement" | "review";
 
 /**
  * What each runner can actually enforce, so the driver never assumes a guarantee it doesn't have.
- * `enforcesReadOnly`: only claude exposes a verified tool allow-list flag (`--allowedTools`), so it is
- * the only runner whose adversarial rubric session is tool-constrained by construction. codex/opencode
- * reviewers run with their own defaults — the driver warns rather than silently pretending otherwise.
+ * `enforcesReadOnly`: claude constrains the rubric session with a tool allow-list (`--allowedTools`),
+ * codex with an OS-level filesystem sandbox (`--sandbox read-only`) — different mechanisms, both binding.
+ * opencode has neither, so its reviewer runs unconstrained and the driver warns rather than pretending.
  * `supportsOutputSchema`: codex `--output-schema <file>` pins the final response to a JSON Schema, which
  * beats prose-parsing the rubric verdict (parseRubricVerdict stays the fallback for the others).
  */
@@ -28,7 +28,7 @@ export type RunnerCapabilities = {
 };
 export const RUNNER_CAPABILITIES: Record<RunnerName, RunnerCapabilities> = {
   claude: { enforcesReadOnly: true, supportsOutputSchema: false, slashInModel: false },
-  codex: { enforcesReadOnly: false, supportsOutputSchema: true, slashInModel: false },
+  codex: { enforcesReadOnly: true, supportsOutputSchema: true, slashInModel: false },
   opencode: { enforcesReadOnly: false, supportsOutputSchema: false, slashInModel: true },
 };
 

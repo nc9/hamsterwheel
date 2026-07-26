@@ -113,6 +113,10 @@ describe("buildRunnerArgs — codex", () => {
       "exec",
       PROMPT,
       "--json",
+      "-c",
+      'approval_policy="never"',
+      "--sandbox",
+      "workspace-write",
       "-m",
       "gpt-5-codex",
       "-c",
@@ -130,7 +134,7 @@ describe("buildRunnerArgs — codex", () => {
 
   test("codex rejects claude's effort vocabulary — the flag is dropped, not forwarded", () => {
     const argv = buildRunnerArgs(spec({ runner: "codex", role: "implement", effort: "xhigh" }));
-    expect(argv).not.toContain("-c");
+    expect(argv.some((a) => a.startsWith("model_reasoning_effort="))).toBe(false);
   });
 });
 
@@ -150,6 +154,7 @@ describe("buildRunnerArgs — opencode", () => {
       PROMPT,
       "--format",
       "json",
+      "--auto",
       "-m",
       "anthropic/claude-opus-4-8",
       "--variant",
@@ -167,6 +172,33 @@ describe("buildRunnerArgs — opencode", () => {
   test("only opencode-known efforts survive", () => {
     const argv = buildRunnerArgs(spec({ runner: "opencode", role: "implement", effort: "xhigh" }));
     expect(argv).not.toContain("--variant");
+  });
+});
+
+// A runner with its own consent model blocks on ITS OWN approval prompt even when the harness has
+// allow-listed the tool — unattended sessions stalled overnight on exactly this. Both layers must be
+// handled by the argv, so the flags are asserted for every role, not just the happy path.
+describe("unattended consent is baked into the argv", () => {
+  test("codex always carries approval_policy=never, with a role-appropriate sandbox", () => {
+    for (const role of ["implement", "review"] as const) {
+      const argv = buildRunnerArgs(spec({ runner: "codex", role }));
+      expect(argv).toContain('approval_policy="never"');
+      expect(argv[argv.indexOf("--sandbox") + 1]).toBe(
+        role === "review" ? "read-only" : "workspace-write",
+      );
+    }
+  });
+
+  test("the codex grader is filesystem-read-only even when the caller asks for bypass", () => {
+    const argv = buildRunnerArgs(
+      spec({ runner: "codex", role: "review", bypassPermissions: true }),
+    );
+    expect(argv[argv.indexOf("--sandbox") + 1]).toBe("read-only");
+  });
+
+  test("opencode always carries --auto", () => {
+    for (const role of ["implement", "review"] as const)
+      expect(buildRunnerArgs(spec({ runner: "opencode", role }))).toContain("--auto");
   });
 });
 

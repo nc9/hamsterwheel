@@ -62,6 +62,8 @@ export type Config = {
   sessionTimeoutMs: number;
   ciTimeoutMs: number;
   maxDiffBytes: number;
+  /** Hard cap on review-fix rounds. The reviewer is stateless, so unbounded it never converges. */
+  maxReviewRounds: number;
   maxIterations: number;
   worktreeRoot: string;
 };
@@ -310,6 +312,10 @@ export const parseConfig = (raw: unknown, opts: { home?: string } = {}): Config 
     sessionTimeoutMs: r.num("session_timeout_ms", 60 * 60 * 1000, 60_000),
     ciTimeoutMs: r.num("ci_timeout_ms", 15 * 60 * 1000, 30_000),
     maxDiffBytes: r.num("max_diff_bytes", 60_000, 1000),
+    // 4 by design, not by taste: measured on a ~50-line PR the review workflow ran 6 rounds with
+    // findings 3→6→3→3→3→3; substantive fixes were exhausted by round 3-4 and rounds 5-6 objected to
+    // flags and identifiers that do not exist. 0 disables the fix loop (findings block immediately).
+    maxReviewRounds: r.num("max_review_rounds", 4, 0),
     maxIterations: r.num("max_iterations", 50),
     worktreeRoot: r.str("worktree_root", `${home}/.hamsterwheel/worktrees`),
   };

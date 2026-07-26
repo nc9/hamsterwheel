@@ -20,9 +20,33 @@ export const reviewBlockingFindings = (
     .filter((l) => blockingRe.test(l))
     .map((l) => l.trim().slice(0, 140));
 
+/**
+ * Did a review actually run against the CURRENT head, or are we reading silence?
+ *
+ * `blockingReview: 0` is ambiguous: it means "no blocking findings" AND "no review happened" AND "the
+ * only review on this PR predates the commit we're about to merge". Absence of a signal is not approval.
+ * Observed: GitHub's review action refuses to run on any PR that edits a workflow file (supply-chain
+ * protection), skips, and reports the check as SUCCESS — so the highest-risk PRs get a green check, no
+ * comment, and, since the gate reads the LAST bot comment regardless of age, a stale review of an
+ * earlier commit.
+ *
+ * `commentAt`/`headAt` are ISO timestamps; a missing `commentAt` means no review comment exists at all.
+ */
+export const reviewCoversHead = (commentAt: string | undefined, headAt: string): boolean => {
+  if (!commentAt) return false;
+  const c = Date.parse(commentAt);
+  const h = Date.parse(headAt);
+  // Unparseable either side → treat as not covered. This is a safety check; garbage in must not read
+  // as "reviewed".
+  if (Number.isNaN(c) || Number.isNaN(h)) return false;
+  return c >= h;
+};
+
 export type GateSignals = {
   ciGreen: boolean;
   hasMigration: boolean;
+  /** False when no review comment postdates the head commit. Absence of findings is NOT approval. */
+  reviewObserved: boolean;
   blockingReview: number;
   rubricPass: boolean;
 };
@@ -35,6 +59,14 @@ export const mergeDecision = (s: GateSignals): GateAction => {
       action: "BLOCK",
       reason: "needs-prod-migration",
       detail: "PR adds a DB migration — apply to prod manually, then merge",
+    };
+  // Before trusting a clean review, require evidence one happened. Ordered ahead of the findings check
+  // so a stale-but-clean comment can never stand in for a review of the code being merged.
+  if (!s.reviewObserved)
+    return {
+      action: "BLOCK",
+      reason: "needs-decision",
+      detail: "no review of the current head — silence is not approval",
     };
   if (s.blockingReview > 0)
     return {

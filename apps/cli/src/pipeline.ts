@@ -13,6 +13,7 @@ import {
   preserveWorktreeChanges,
   resolveSessionPolicy,
   reviewBlockingFindings,
+  reviewCoversHead,
   wipBranchName,
   worktreeAddArgs,
   worktreeHasChanges,
@@ -165,17 +166,59 @@ export const prTouchesMigration = async (gh: Gh, cfg: Config, prNum: number): Pr
  * (what most review bots post) AND submitted PR reviews, so a bot that switches format doesn't silently
  * drop findings.
  */
+export type ReviewState = {
+  blocking: string[];
+  /** A review comment postdates the head commit. False = no review of this code; NOT the same as clean. */
+  observed: boolean;
+};
+
+/** Tolerant parse of the jq projection below — a malformed/absent body must read as "no review". */
+const parseBotComment = (raw: string | null | undefined): { body: string; at: string } => {
+  if (!raw?.trim()) return { body: "", at: "" };
+  try {
+    const o = JSON.parse(raw) as { body?: string; at?: string };
+    return { body: o.body ?? "", at: o.at ?? "" };
+  } catch {
+    return { body: "", at: "" };
+  }
+};
+
 export const fetchBlockingReview = async (
   gh: Gh,
   cfg: Config,
   prNum: number,
-): Promise<string[]> => {
-  const jq = `[.[]|select(.user.login=="${cfg.review.bot}")]|last|.body // ""`;
-  const issueComments =
-    (await gh.tryText(["api", `repos/${cfg.repo}/issues/${prNum}/comments`, "--jq", jq])) ?? "";
-  const prReviews =
-    (await gh.tryText(["api", `repos/${cfg.repo}/pulls/${prNum}/reviews`, "--jq", jq])) ?? "";
-  return reviewBlockingFindings(`${issueComments}\n${prReviews}`, cfg.review.blockingSeverityRe);
+): Promise<ReviewState> => {
+  // Latest bot body AND its timestamp. The timestamp is the load-bearing part: the body alone cannot
+  // distinguish "reviewed and clean" from "never reviewed" from "reviewed two commits ago".
+  const jq = `[.[]|select(.user.login=="${cfg.review.bot}")]|last|{body:(.body // ""),at:(.created_at // .submitted_at // "")}`;
+  const botComment = parseBotComment(
+    await gh.tryText(["api", `repos/${cfg.repo}/issues/${prNum}/comments`, "--jq", jq]),
+  );
+  const review = parseBotComment(
+    await gh.tryText(["api", `repos/${cfg.repo}/pulls/${prNum}/reviews`, "--jq", jq]),
+  );
+  const headAt =
+    (await gh.tryText([
+      "pr",
+      "view",
+      String(prNum),
+      "-R",
+      cfg.repo,
+      "--json",
+      "commits",
+      "--jq",
+      '.commits|last|.committedDate // ""',
+    ])) ?? "";
+
+  // ISO-8601 UTC sorts lexicographically, so this picks the genuinely newer of the two surfaces.
+  const latestAt = [botComment.at, review.at].filter(Boolean).toSorted().at(-1);
+  return {
+    blocking: reviewBlockingFindings(
+      `${botComment.body}\n${review.body}`,
+      cfg.review.blockingSeverityRe,
+    ),
+    observed: reviewCoversHead(latestAt, headAt.trim()),
+  };
 };
 
 /**
@@ -291,7 +334,7 @@ const runReviewRounds = async (
     // Re-verify with the SAME signal that produced the finding: a fix loop that gates on review findings
     // but re-checks only a typechecker exits on a stale signal and reports fixed work as unresolved.
     ci = await waitForChecks(gh, cfg, prNum);
-    blocking = await fetchBlockingReview(gh, cfg, prNum);
+    blocking = (await fetchBlockingReview(gh, cfg, prNum)).blocking;
   }
   if (blocking.length) {
     // Cap hit: post the leftovers as a COMMENT (does not retrigger review) and stop pushing.
@@ -316,24 +359,33 @@ export const runMergeGate = async (
   log(`  gate #${iss.number} PR #${prNum}: waiting for CI…`);
   let ci = await waitForChecks(gh, cfg, prNum);
   const hasMigration = await prTouchesMigration(gh, cfg, prNum);
-  let blocking = await fetchBlockingReview(gh, cfg, prNum);
+  let review = await fetchBlockingReview(gh, cfg, prNum);
   let rounds = 0;
   // A migration parks for a human regardless, so don't spend rounds fixing review findings on it.
-  if (blocking.length && !hasMigration) {
-    const r = await runReviewRounds(deps, iss, prNum, worktree, blocking);
-    blocking = r.blocking;
+  if (review.blocking.length && !hasMigration) {
+    const r = await runReviewRounds(deps, iss, prNum, worktree, review.blocking);
     rounds = r.rounds;
     if (r.rounds > 0) ci = r.ci;
+    // Re-read provenance too: the fix rounds pushed new commits, so the head moved and the review that
+    // produced `r.blocking` may now predate it. Reusing the pre-round `observed` would assert the new
+    // head was reviewed on the strength of a review of the old one.
+    review = { ...(await fetchBlockingReview(gh, cfg, prNum)), blocking: r.blocking };
   }
+  if (!review.observed)
+    log(
+      "  ⚠ gate: no review comment postdates the head commit — treating as UNREVIEWED, not clean. " +
+        "A review action that skips (e.g. on workflow-file changes) still reports its check green.",
+    );
   let rubricPass = false;
-  if (ci.green && !hasMigration && !blocking.length) {
+  if (ci.green && !hasMigration && review.observed && !review.blocking.length) {
     log("  gate: CI green, no migration, review clean → running rubric…");
     rubricPass = (await runRubric(deps, iss, prNum, worktree, ci)).pass;
   }
   const decision = mergeDecision({
     ciGreen: ci.green,
     hasMigration,
-    blockingReview: blocking.length,
+    reviewObserved: review.observed,
+    blockingReview: review.blocking.length,
     rubricPass,
   });
   deps.runLog.append("gate", {
@@ -342,7 +394,8 @@ export const runMergeGate = async (
     ciGreen: ci.green,
     failing: ci.failing,
     hasMigration,
-    blockingReview: blocking.length,
+    reviewObserved: review.observed,
+    blockingReview: review.blocking.length,
     reviewRounds: rounds,
     rubricPass,
     decision,

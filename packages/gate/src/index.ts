@@ -13,6 +13,7 @@ export {
   mergeDecision,
   detectMigration,
   reviewBlockingFindings,
+  reviewCoversHead,
 } from "./gate.ts";
 export {
   type RubricVerdict,

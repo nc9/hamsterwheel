@@ -37,6 +37,26 @@ If that returns 0 on a review that clearly contained serious findings, the arm i
 
 Watch out for a trap when verifying: a review that _discusses_ the regex will match it. Check that the matches are real findings, not the reviewer quoting the pattern.
 
+## 2b. Know that a skipped review still reports green — **SILENT**
+
+Related, and worse, because the PRs it hits are the ones that most need reviewing.
+
+GitHub's Claude review action refuses to run on any PR whose diff touches a workflow file — the workflow content must match the default branch's copy, a supply-chain protection. When it refuses it **skips, posts nothing, and the check reports SUCCESS**:
+
+```
+##[warning]Skipping action due to workflow validation: Workflow validation failed.
+Attempt 1 failed: ... Error is not retryable, giving up immediately
+```
+
+So a PR editing CI gets a green check, no review comment, and no findings. Under a naive gate that reads as CI green + review clean → merge.
+
+hamsterwheel closes this with `reviewObserved`: the gate requires a review comment whose timestamp postdates the head commit, and blocks as `needs-decision` when there isn't one. Two failures collapse into it, and both would otherwise read as approval:
+
+- **no review at all** (skipped, errored, workflow disabled, wrong `review.bot` login)
+- **a stale review** — the gate reads the _last_ bot comment regardless of age, so after a fix push, a review of the previous commit would otherwise stand in for a review of the code being merged
+
+If you build your own gate, take the principle rather than the code: **absence of a signal is not approval.** Require positive evidence that the check you depend on actually ran against the artifact you are about to ship.
+
 ## 3. Check the criteria heading matches, literally — **SILENT**
 
 ```bash

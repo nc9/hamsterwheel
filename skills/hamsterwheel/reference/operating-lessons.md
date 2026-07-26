@@ -26,6 +26,16 @@ Two independent instances of the same mistake:
 
 Both times the tempting fix was a cleverer parser. Both times the right fix was to make the producer emit structure.
 
+### Absence of a signal is not approval
+
+The most dangerous shape a gate can take is one where "everything is fine" and "nothing ran" are the same value.
+
+`blockingReview: 0` had three meanings: reviewed and clean, never reviewed, and reviewed two commits ago. GitHub's review action makes the middle one routine — it refuses to run on any PR that edits a workflow file, then **skips, posts no comment, and reports its check as SUCCESS.** The PRs most in need of review are exactly the ones that silently get none.
+
+The fix is `reviewObserved`: require a review comment whose timestamp postdates the head commit, and block when there isn't one. That also catches the stale case, since a gate reading the _last_ bot comment will otherwise let a review of the previous commit stand in for a review of the code being merged.
+
+Generalise it. For any check a gate depends on, ask what value it takes when the check never ran, and whether that value is distinguishable from success. If it isn't, the gate has a hole shaped exactly like your most important PR.
+
 ## Failure scope
 
 ### Run-fatal vs issue-fatal

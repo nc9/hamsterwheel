@@ -16,6 +16,7 @@ import {
   parseWipBranches,
   preserveWorktreeChanges,
   reviewBlockingFindings,
+  reviewCoversHead,
   screenInjection,
   wipBranchName,
   worktreeAddArgs,
@@ -460,8 +461,51 @@ describe("preserveWorktreeChanges", () => {
 });
 
 describe("mergeDecision", () => {
-  const base = { ciGreen: true, hasMigration: false, blockingReview: 0, rubricPass: true };
+  const HEAD = "2026-07-26T23:28:43Z";
+  describe("reviewCoversHead", () => {
+    test("a comment at or after the head commit covers it", () => {
+      expect(reviewCoversHead("2026-07-26T23:32:00Z", HEAD)).toBe(true);
+      expect(reviewCoversHead(HEAD, HEAD)).toBe(true);
+    });
+    test("a comment predating the head is a review of different code", () => {
+      expect(reviewCoversHead("2026-07-26T23:24:41Z", HEAD)).toBe(false);
+    });
+    test("no comment at all is not approval", () => {
+      expect(reviewCoversHead(undefined, HEAD)).toBe(false);
+      expect(reviewCoversHead("", HEAD)).toBe(false);
+    });
+    // A safety check that errored is not a safety check that passed.
+    test("unparseable timestamps fail closed", () => {
+      expect(reviewCoversHead("not-a-date", HEAD)).toBe(false);
+      expect(reviewCoversHead("2026-07-26T23:32:00Z", "")).toBe(false);
+      expect(reviewCoversHead("2026-07-26T23:32:00Z", "garbage")).toBe(false);
+    });
+  });
+
+  const base = {
+    ciGreen: true,
+    hasMigration: false,
+    reviewObserved: true,
+    blockingReview: 0,
+    rubricPass: true,
+  };
   test("all clear → MERGE", () => expect(mergeDecision(base).action).toBe("MERGE"));
+
+  // The gap this closes: `blockingReview: 0` conflates "reviewed, clean" with "never reviewed". A review
+  // action that skips still reports its check green, so CI green + no findings is not evidence of review.
+  test("an unreviewed head blocks even when everything else is clean", () => {
+    const d = mergeDecision({ ...base, reviewObserved: false });
+    expect(d).toMatchObject({ action: "BLOCK", reason: "needs-decision" });
+    if (d.action === "BLOCK") expect(d.detail).toContain("silence is not approval");
+  });
+  test("migration still outranks a missing review", () => {
+    const d = mergeDecision({ ...base, reviewObserved: false, hasMigration: true });
+    expect(d).toMatchObject({ action: "BLOCK", reason: "needs-prod-migration" });
+  });
+  test("a missing review blocks before the rubric is consulted", () => {
+    const d = mergeDecision({ ...base, reviewObserved: false, rubricPass: false });
+    expect(d).toMatchObject({ action: "BLOCK", reason: "needs-decision" });
+  });
   test("ci red blocks first", () => {
     const d = mergeDecision({ ...base, ciGreen: false, hasMigration: true });
     expect(d).toMatchObject({ action: "BLOCK", reason: "ci-red" });

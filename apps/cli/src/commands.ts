@@ -202,6 +202,8 @@ export const workQueue = async (
       break;
     }
     attempted.add(next.number);
+    // A run-fatal error would recur identically on every remaining item, so it aborts the run instead of
+    // walking the queue and blocking each item in turn. claimAndRun has already released its claim.
     await claimAndRun(loopDeps, next, opts.execute);
   } while (opts.loop);
 };

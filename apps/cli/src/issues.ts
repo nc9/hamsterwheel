@@ -27,6 +27,8 @@ export type LoopIssue = {
   injection: string[];
   itemId: string;
   owner?: string;
+  /** Issue state from GitHub. The BOARD drifts (items linger Ready after shipping); the issue does not. */
+  state: "OPEN" | "CLOSED";
 };
 
 type IssueView = {
@@ -34,6 +36,7 @@ type IssueView = {
   body: string | null;
   labels: { name: string }[];
   createdAt: string;
+  state: string;
 };
 
 export const enrichItem = async (
@@ -52,7 +55,7 @@ export const enrichItem = async (
     "-R",
     cfg.repo,
     "--json",
-    "title,body,labels,createdAt",
+    "title,body,labels,createdAt,state",
   ]);
   const labels = d.labels.map((l) => l.name);
   const body = d.body ?? "";
@@ -69,6 +72,7 @@ export const enrichItem = async (
     injection: screenInjection(`${d.title}\n${body}`),
     itemId: item.id,
     owner: itemField(item, cfg.board.ownerField),
+    state: d.state?.toUpperCase() === "CLOSED" ? "CLOSED" : "OPEN",
   };
 };
 
@@ -159,10 +163,21 @@ export const buildQueue = async (gh: Gh, cfg: Config, items: BoardItem[]): Promi
       });
       continue;
     }
+    // Board drift: an item can sit in Ready long after a merged PR closed the issue. Working it burns a
+    // whole session re-doing shipped work, so cross-check the issue state, which never drifts.
+    if (iss.state === "CLOSED") {
+      skipped.push({ num: iss.number, why: "issue is CLOSED — board drift; move it to Done" });
+      continue;
+    }
     if (!iss.hasCriteria) {
+      // Name the likely cause: a heading typo (`## Acceptance` for `## Acceptance Criteria`) makes an
+      // issue silently vanish from the queue, and a silent eligibility failure looks like an empty backlog.
+      const hint = /-\s*\[[ x]\]/.test(iss.body)
+        ? ` — body HAS a checklist but no \`## ${cfg.criteriaHeading}\` heading (typo?)`
+        : "";
       skipped.push({
         num: iss.number,
-        why: `no ${cfg.criteriaHeading} checklist → ${cfg.board.blockedReasons.needsCriteria}`,
+        why: `no ${cfg.criteriaHeading} checklist${hint} → ${cfg.board.blockedReasons.needsCriteria}`,
       });
       continue;
     }

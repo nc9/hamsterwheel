@@ -27,6 +27,8 @@ export const buildAgentDoc = (cfg: Config): string =>
     "Depends on #123        (optional; `Blocked by #123` also works)",
     "```",
     "",
+    `The \`## ${cfg.criteriaHeading}\` heading is matched LITERALLY and is typo-sensitive: \`## Acceptance\` or a reworded heading makes the issue silently drop out of the queue with no error anywhere (run \`hamsterwheel plan\` — it prints a skip reason per excluded issue).`,
+    "",
     `The checklist IS the merge rubric — an adversarial read-only session grades the resulting codebase against every box. No checklist → the loop blocks the issue as \`${cfg.board.blockedReasons.needsCriteria}\`.`,
     "",
     "**Board statuses** (the whole interface):",
@@ -54,6 +56,8 @@ export const buildAgentDoc = (cfg: Config): string =>
     "",
     "**What it will never do:** merge a PR that touches a schema migration (parked as " +
       `\`${cfg.board.blockedReasons.needsProdMigration}\` for a human), cut a release, or act on anything irreversible beyond merge. Issue text is treated as untrusted data — an issue whose text trips the injection tripwire is blocked, never run.`,
+    "",
+    "**CI note for repos where a merge triggers a deploy:** the deploy job must NOT share a `cancel-in-progress` concurrency group with CI. Back-to-back merges each cancel the previous run, so intermediate merges' deploys never execute — six merges once left five services running stale code. `cancel-in-progress` is right for tests and catastrophic for anything with side effects.",
     "",
     "Write issues for a competent stranger: state the observable outcome, not the implementation.",
   ].join("\n");

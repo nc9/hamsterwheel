@@ -20,8 +20,10 @@ import {
   workQueue,
 } from "./commands.ts";
 import { doctor } from "./doctor.ts";
+import { RunFatalError, runFatalReason } from "./errors.ts";
 import { Gh } from "./gh.ts";
 import { init } from "./init.ts";
+import { preflight } from "./preflight.ts";
 import { runPrune } from "./prune.ts";
 import { createRunLog, makeRunId } from "./runlog.ts";
 
@@ -140,12 +142,25 @@ export const main = async (argv: string[]): Promise<number> => {
         log(
           "⚠ --bypass without --sandbox: the session gets unrestricted tools with no isolation boundary.",
         );
+      // Refuse to START on a precondition that would fail identically for every item. Discovering it
+      // per-issue is how a whole curated Ready queue got burned into Blocked in under a minute.
+      if (args.execute) preflight({ cfg, sandbox: args.sandbox });
       if (args.execute) await runTriagePasses(deps);
-      await workQueue(deps, {
-        loop: args.command === "run",
-        execute: args.execute,
-        issue: args.issue,
-      });
+      try {
+        await workQueue(deps, {
+          loop: args.command === "run",
+          execute: args.execute,
+          issue: args.issue,
+        });
+      } catch (e) {
+        const fatal = runFatalReason(e);
+        if (!fatal) throw e;
+        // The in-flight item was already released back to Ready; everything behind it is untouched.
+        log(`\n✗ run aborted — ${fatal}`);
+        log("  (the queue is intact: the claimed item was released, nothing else was touched)");
+        deps.runLog.append("run-aborted", { reason: fatal });
+        return 1;
+      }
       return 0;
     }
   }
@@ -155,7 +170,8 @@ if (import.meta.main) {
   try {
     process.exit(await main(process.argv));
   } catch (e) {
-    console.error(e instanceof ConfigError ? e.message : `✗ ${String(e)}`);
+    if (e instanceof RunFatalError) console.error(`✗ ${e.message}${e.hint ? `\n  ${e.hint}` : ""}`);
+    else console.error(e instanceof ConfigError ? e.message : `✗ ${String(e)}`);
     process.exit(1);
   }
 }

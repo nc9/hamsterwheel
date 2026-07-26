@@ -90,6 +90,8 @@ install_cmd = "bun install"
 number = ${v.projectNumber}
 title = "${v.projectTitle}"
 
+max_review_rounds = 4
+
 [runners.implement]
 runner = "claude"
 strong_model = "opus"

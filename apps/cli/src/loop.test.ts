@@ -89,6 +89,7 @@ const fakeGh = (issues: IssueFixture[]) => {
           body: iss.body,
           labels: (iss.labels ?? []).map((name) => ({ name })),
           createdAt: iss.createdAt ?? "2026-01-01T00:00:00Z",
+          state: iss.state ?? "OPEN",
         }),
       );
     }
@@ -174,6 +175,34 @@ describe("buildQueue", () => {
     expect(why[4]).toContain("epic");
     expect(why[5]).toContain("prompt-injection");
     expect(why[6]).toContain("#1");
+  });
+
+  // A silent eligibility failure looks exactly like an empty backlog, which is the worst failure mode:
+  // a heading typo once made issues vanish from the queue with no error anywhere.
+  test("a heading typo names itself in the skip reason instead of vanishing", async () => {
+    const { gh } = fakeGh([
+      { number: 1, title: "typo", body: "## Acceptance\n- [ ] it works", labels: ["P1"] },
+      {
+        number: 2,
+        title: "no checklist at all",
+        body: "## Acceptance Criteria\njust prose",
+        labels: ["P1"],
+      },
+    ]);
+    const ctx = await loadBoardCtx(gh, cfg);
+    const q = await buildQueue(gh, cfg, await listItems(gh, ctx));
+    const why = Object.fromEntries(q.skipped.map((s) => [s.num, s.why]));
+    expect(why[1]).toContain("typo?");
+    expect(why[2]).not.toContain("typo?");
+  });
+
+  // The board drifts (items linger in Ready after a PR ships); the issue state does not.
+  test("a CLOSED issue sitting in Ready is skipped, not worked", async () => {
+    const { gh } = fakeGh([{ number: 5, title: "already shipped", ...base, state: "CLOSED" }]);
+    const ctx = await loadBoardCtx(gh, cfg);
+    const q = await buildQueue(gh, cfg, await listItems(gh, ctx));
+    expect(q.eligible).toHaveLength(0);
+    expect(q.skipped[0]!.why).toContain("CLOSED");
   });
 
   test("only Ready items are considered", async () => {

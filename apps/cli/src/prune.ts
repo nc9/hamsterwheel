@@ -88,8 +88,16 @@ export const runPrune = async (
       opts.log("\n(dry run — pass --delete to actually remove these local branches)");
     return;
   }
+  // One explicit branch at a time, from a classified list — never a pattern handed to xargs. The
+  // `(was <sha>)` git prints is logged because it is the only handle that makes a wrong delete
+  // recoverable. Note when auditing such a sha: a squash-merged branch tip is NOT an ancestor of the
+  // base branch, so `merge-base --is-ancestor` reports false loss.
   for (const d of toPrune) {
     const r = await deleteBranch(d.branch);
-    opts.log(r.ok ? `  deleted ${d.branch}` : `  ✗ failed to delete ${d.branch}: ${r.error}`);
+    opts.log(
+      r.ok
+        ? `  deleted ${d.branch}${r.was ? ` (was ${r.was} — restore with \`git branch ${d.branch} ${r.was}\`)` : ""}`
+        : `  ✗ failed to delete ${d.branch}: ${r.error}`,
+    );
   }
 };

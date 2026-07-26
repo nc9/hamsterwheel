@@ -38,7 +38,8 @@ Extracted from a production loop that ran overnight autonomous implementation wa
 - Parse LLM JSON verdicts by scanning back from the last `}` with brace matching; models wrap JSON in prose.
 
 ### Run-fatal vs issue-fatal
-- A failure about THIS issue blocks THIS issue. A precondition that would fail identically for every item (sandbox credentials, docker, a runner binary, gh auth, a missing board field, a broken install command) is RUN-FATAL: abort the run, release the claim back to Ready, touch nothing else. `run --execute --sandbox` without the token once failed closed *per issue* and burned an entire curated Ready queue into Blocked in under a minute — the fail-closed was right, the per-issue blame was not. Check every such precondition once in a preflight so the run refuses to start.
+
+- A failure about THIS issue blocks THIS issue. A precondition that would fail identically for every item (sandbox credentials, docker, a runner binary, gh auth, a missing board field, a broken install command) is RUN-FATAL: abort the run, release the claim back to Ready, touch nothing else. `run --execute --sandbox` without the token once failed closed _per issue_ and burned an entire curated Ready queue into Blocked in under a minute — the fail-closed was right, the per-issue blame was not. Check every such precondition once in a preflight so the run refuses to start.
 - Unattended sessions need approval bypass at EVERY layer. A harness tool allow-list does not cover a runner's own consent model: codex needs `approval_policy="never"` + an explicit `--sandbox` mode, opencode needs `--auto`. Bake them into the argv, never into a README instruction.
 
 ### Session outcomes
@@ -58,7 +59,8 @@ Extracted from a production loop that ran overnight autonomous implementation wa
 - Worktrees: `worktree add -B` not `-b` (re-runs reuse the branch name), `git worktree prune` first (dir-less registrations block `-B`), fetch the base branch per issue so late items branch off the latest merged main.
 
 ### Bounded review rounds
-- Cap review-fix rounds at 4. The reviewer is stateless and re-derives from scratch, so each fix push triggers a deeper pass and it never converges: on a ~50-line PR, 6 rounds with findings 3→6→3→3→3→3, nothing substantive after round 3-4, then objections to flags and identifiers that do not exist. Exit mechanic: a PR *comment* does not trigger re-review, only a push does — post the remaining findings with citations and stop committing.
+
+- Cap review-fix rounds at 4. The reviewer is stateless and re-derives from scratch, so each fix push triggers a deeper pass and it never converges: on a ~50-line PR, 6 rounds with findings 3→6→3→3→3→3, nothing substantive after round 3-4, then objections to flags and identifiers that do not exist. Exit mechanic: a PR _comment_ does not trigger re-review, only a push does — post the remaining findings with citations and stop committing.
 - Whatever produced a signal must be what re-verifies it. A fix loop fed review findings but re-checking only the typechecker exits on a stale signal and reports already-fixed bugs as unresolved.
 
 ### Operating at scale (parallel waves)

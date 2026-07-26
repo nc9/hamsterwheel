@@ -1,0 +1,131 @@
+---
+name: hamsterwheel
+description: Set up and operate hamsterwheel, an autonomous GitHub-issue loop that implements, reviews, gates and merges issues unattended. Use when adopting hamsterwheel in a repo, writing loop-eligible issues, configuring hamsterwheel.toml, choosing runner/model/effort labels, running a batch, or debugging why the loop skipped, blocked or failed an issue.
+---
+
+# hamsterwheel
+
+An autonomous issue loop: claim a Ready issue → worktree → headless implement session → PR → CI → adversarial rubric grade → deterministic merge gate → merge or Blocked-with-a-reason.
+
+You are the PM. The loop is the IC. Your job is the board and the issue contract; its job is everything after `Ready`.
+
+## The one rule
+
+**`plan` before every batch. It mutates nothing.**
+
+```bash
+hamsterwheel plan
+```
+
+It prints the eligible queue in selection order, the resolved runner/model/effort per issue with a source key, and a skip reason for every excluded issue. On its first real repo it caught two bugs that would otherwise have surfaced as mystery 3am failures: a legitimate issue quarantined by an injection false positive, and a label combination resolving to a model id the target vendor has never heard of.
+
+Silent eligibility failure is the worst failure mode in a system nobody is watching. An empty backlog and a broken filter look identical from the outside. `plan` is the difference.
+
+## Adopting it in a repo
+
+```bash
+hamsterwheel doctor           # prerequisites: git, gh auth + project scope, docker, runner binaries
+hamsterwheel init --dry-run   # every mutation init would make, printed, applied to nothing
+hamsterwheel init             # provision board + labels, write hamsterwheel.toml, splice the contract
+```
+
+`init` splices the issue contract into `CLAUDE.md` and `AGENTS.md` between `<!-- hamsterwheel:start -->` markers, and rewrites in place on re-run. Splice it into **both** if your implement and review runners are different vendors: Claude reads CLAUDE.md, Codex reads AGENTS.md, and a contract only one of them can see is a contract only one of them follows.
+
+Then, before the first batch, work `reference/adoption-checklist.md`. Four of its items are things that fail silently rather than loudly, and one of them defeats the merge gate entirely.
+
+## The issue contract
+
+An issue is eligible only with **both** an `## Acceptance Criteria` heading and at least one markdown checkbox under it:
+
+```markdown
+## Acceptance Criteria
+
+- [ ] observable, checkable behavior
+- [ ] one checkbox per requirement
+
+Depends on #123 (optional; "Blocked by #123" also works)
+```
+
+The heading is matched literally and is typo-sensitive. `## Acceptance`, or a reworded heading, drops the issue out of the queue with no error anywhere. (`criteria_heading` in the config changes what's matched, but it's still literal.)
+
+**The checklist IS the merge rubric.** A fresh adversarial read-only session grades the resulting codebase against every box. So write boxes a grader can settle by reading a diff:
+
+- Good: "`SOCIAL_DISPLAY` keys derive from `(typeof siteConfig.socials)[number]["name"]`, so an unknown platform is a build error."
+- Useless: "the footer is more robust."
+
+Criteria the grader physically cannot run ("tests pass", "typecheck clean") are fine to write — the deterministic CI gate owns them and credits them in code once CI is green. Do not omit them; do not expect the grader to have run them.
+
+Also required for eligibility: a priority label (`P0`–`P3`) and a size label (`size: XS`–`size: XL`). Unsized defaults to expensive, which is the right way round.
+
+## Labels: runner, model, effort
+
+Six independent axes, three per role. All optional.
+
+| label                                                                   | effect                                     |
+| ----------------------------------------------------------------------- | ------------------------------------------ |
+| `loop:impl-runner-<claude\|codex\|opencode>`                            | which agent CLI implements                 |
+| `loop:impl-model-<model>`                                               | model for the implement session            |
+| `loop:impl-effort-<level>`                                              | reasoning effort for the implement session |
+| `loop:review-runner-*` / `loop:review-model-*` / `loop:review-effort-*` | the same three for the rubric grader       |
+| `loop:model-<model>`                                                    | legacy alias for `loop:impl-model-*`       |
+
+Resolution per axis: **validated label → config default → heuristic → the runner's own default.** The heuristic sends P0/P1 or size ≥ M to the strong model, and XS or docs/test/chore/style/ci-shaped work to the cheap one.
+
+An invalid label falls back **silently and deliberately**. A typo that reached the spawn would exit non-zero and read as a generic implement failure, and you would debug the wrong thing for an hour.
+
+Effort vocabularies differ per runner and a foreign value is dropped, not translated:
+
+| runner   | effort values                         |
+| -------- | ------------------------------------- |
+| claude   | `low` `medium` `high` `xhigh` `max`   |
+| codex    | `minimal` `low` `medium` `high`       |
+| opencode | `minimal` `low` `medium` `high` `max` |
+
+**Model ids are opaque vendor tokens, so validation is shape-only.** Nothing can tell that `sonnet` is meaningless to Codex. Two consequences: a `loop:impl-runner-*` label that switches vendors discards the config's model tiers rather than forwarding them, and you should not pin a vendor model id in config unless you intend to maintain it — leave `strong_model`/`cheap_model` unset and the runner uses the operator's own default.
+
+## Running a batch
+
+```bash
+hamsterwheel once --execute --issue 42 --pr-only   # one issue, stop at the PR
+hamsterwheel once --execute                        # one issue, full gate
+hamsterwheel run  --execute                        # until the Ready queue is empty (serial)
+hamsterwheel run  --execute --sandbox              # sessions OS-isolated in docker
+```
+
+`once`/`run` mutate the board **only** with `--execute`. `plan`, `reconcile` and `prune` (without `--delete`) never mutate anything.
+
+Start a new repo on `--pr-only`. It runs the identical pipeline and stops at the open PR, so you inspect real output before the merge path ever executes unsupervised. Graduate to the full gate once you've seen the reviewer emit a correctly-tagged blocking finding at least once — until then the blocking-review path is untested in that repo, and an untested gate arm reads as approval.
+
+## The merge gate
+
+The merge decision is a pure function over four booleans, evaluated in a fixed order:
+
+```
+CI → migration → blocking review findings → rubric
+```
+
+No model is ever asked "should this merge?" Models grade the rubric, which is a judgement call over English. Reconciling that grade with CI, migrations and review findings is deterministic tested code.
+
+Never auto-merged regardless of how green things look: anything touching a migration path (parked as `needs-prod-migration`), and anything carrying a high or critical review finding. Nits don't block.
+
+**`blockingReview` is the arm most likely to be silently broken in your repo.** It greps your review bot's comment for severity markers. If your review workflow asks for freeform prose, no finding ever carries a marker, `blockingReview` is always 0, and the gate reads every review — including one flagging real problems — as approval. Verify it empirically before trusting it; `reference/adoption-checklist.md` has the exact test.
+
+## When something goes wrong
+
+| symptom                                             | first move                                                                                |
+| --------------------------------------------------- | ----------------------------------------------------------------------------------------- |
+| issue never appears in the queue                    | `plan` — read its skip reason                                                             |
+| legitimate issue skipped as injection               | check the title for `act as`, `new task:` and similar; the tripwire is deliberately blunt |
+| everything blocked at once                          | a run-fatal precondition leaked into per-issue blame; check preflight, then `reconcile`   |
+| item stuck In Progress with nothing running         | `reconcile`                                                                               |
+| burst of instant failures, ~1/min, tiny transcripts | session quota exhaustion, not bugs — see reference                                        |
+| driver died mid-gate with a PR open                 | do **not** re-run that issue; finish the gate by hand                                     |
+
+A failure about **this** issue blocks this issue. A precondition that fails identically for every item — docker, gh auth, a missing runner binary, a broken install command — is **run-fatal**: abort, release the claim, touch nothing else. If a whole curated queue went Blocked in under a minute, that taxonomy is what broke, not the sandbox.
+
+## Reference
+
+- `reference/adoption-checklist.md` — the pre-first-run checklist, including the silent-failure items
+- `reference/operating-lessons.md` — the paid-for lessons: git safety, review-loop bounds, quota signatures, parallel-wave hazards
+
+Full CLI surface: `hamsterwheel --help`. Config: `hamsterwheel.example.toml`. Architecture: `docs/design.md`.

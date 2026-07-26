@@ -41,7 +41,20 @@ hamsterwheel/
     gate/           # @hamsterwheel/gate — pure, tested merge-gate + selection + routing policy
     runners/        # @hamsterwheel/runners — claude/codex/opencode argv, validation, output parsing
     config/         # @hamsterwheel/config — hamsterwheel.toml schema + loader
+  skills/
+    hamsterwheel/   # agent skill: how to adopt and operate the loop, + the paid-for lessons
 ```
+
+## Using it from a coding agent
+
+`skills/hamsterwheel/` is a [skill](https://code.claude.com/docs/en/skills) covering adoption, the issue
+contract, label policy, and what to do when the loop skips or blocks something. Point your agent at it,
+or copy the directory into your repo's `.claude/skills/`.
+
+It carries two reference files worth reading even by hand: `reference/adoption-checklist.md` (the
+pre-first-run checks, four of which fail _silently_ — one of them defeats the merge gate outright) and
+`reference/operating-lessons.md` (git safety, review-loop bounds, quota signatures, parallel-wave
+hazards).
 
 ## Development
 

@@ -121,6 +121,49 @@ describe("resolveSessionPolicy — resolution order", () => {
     expect(p.implement.effort).toBeUndefined();
   });
 
+  // Caught on the first real run: `loop:impl-runner-codex` on an otherwise unlabelled issue resolved to
+  // codex/sonnet, because the heuristic tier reads strong/cheap_model out of a config block written for
+  // claude. validateModel is shape-only and cannot catch it, so `codex -m sonnet` would have died as a
+  // generic implement failure.
+  test("a label-switched runner discards config model defaults rather than forwarding claude ids", () => {
+    const p = resolveSessionPolicy(
+      mk({ priority: 3, size: 0, labels: ["loop:impl-runner-codex"] }),
+      defaults({
+        implement: {
+          runner: "claude",
+          model: "claude-opus-5",
+          strongModel: "opus",
+          cheapModel: "sonnet",
+        },
+      }),
+    );
+    expect(p.implement.runner).toBe("codex");
+    expect(p.implement.model).toBeUndefined();
+    expect(p.implement.source.model).toBe("runner-default");
+  });
+
+  test("an explicit model label still wins when the runner was switched by label", () => {
+    const p = resolveSessionPolicy(
+      mk({
+        priority: 3,
+        size: 0,
+        labels: ["loop:impl-runner-codex", "loop:impl-model-gpt-5.6-sol"],
+      }),
+      defaults(),
+    );
+    expect(p.implement).toMatchObject({ runner: "codex", model: "gpt-5.6-sol" });
+    expect(p.implement.source.model).toBe("label");
+  });
+
+  test("config models survive when the label names the runner already configured", () => {
+    const p = resolveSessionPolicy(
+      mk({ priority: 3, size: 0, labels: ["loop:impl-runner-claude"] }),
+      defaults(),
+    );
+    expect(p.implement).toMatchObject({ runner: "claude", model: "sonnet" });
+    expect(p.implement.source.model).toBe("heuristic");
+  });
+
   test("the four axes are independent across roles", () => {
     const p = resolveSessionPolicy(
       mk({

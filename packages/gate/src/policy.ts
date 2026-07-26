@@ -114,10 +114,17 @@ const resolveRole = (
   const modelLabel =
     labelValue(iss.labels, p.model) ??
     (role === "implement" ? labelValue(iss.labels, LABEL_PREFIXES.legacyModel) : undefined);
+  // A model id is an opaque vendor token, so validateModel is shape-only — it cannot tell that "sonnet"
+  // is meaningless to codex. So when a LABEL switched the runner away from the configured one, every
+  // config-supplied model default is discarded: those ids were authored for a different vendor, and
+  // forwarding them produces `codex -m sonnet`, which dies as a generic implement failure. Effort needs
+  // no such guard — RUNNER_EFFORTS validates it per runner. Label-supplied models are honored as-is:
+  // whoever writes `loop:impl-runner-codex` alongside `loop:impl-model-*` picked both deliberately.
+  const runnerSwitchedByLabel = runnerSource === "label" && runner !== defaults.runner;
   const fromLabel = validateModel(runner, modelLabel);
-  const fromConfig = validateModel(runner, defaults.model);
+  const fromConfig = runnerSwitchedByLabel ? undefined : validateModel(runner, defaults.model);
   const heuristic =
-    defaults.strongModel && defaults.cheapModel
+    !runnerSwitchedByLabel && defaults.strongModel && defaults.cheapModel
       ? validateModel(
           runner,
           pickSessionModel(iss, { strong: defaults.strongModel, cheap: defaults.cheapModel }),

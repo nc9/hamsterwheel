@@ -7,7 +7,13 @@ export const INJECTION_MARKERS: [string, RegExp][] = [
     "override-instructions",
     /\b(ignore|disregard|forget|override)\b[^.\n]{0,40}\b(all|any|previous|prior|above|earlier|your)\b[^.\n]{0,20}\b(instruction|context|prompt|rule|system)/i,
   ],
-  ["role-hijack", /\b(you are now|new instructions|new task:|act as|pretend to be|from now on)\b/i],
+  // `act as` / `pretend to be` are ordinary technical English ("%/_ act as wildcards"), so they only
+  // trip when aimed at an identity — the thing a hijack actually needs. The bare verbs cost a real
+  // issue a false positive on their first outing; the unconditional openers stay unconditional.
+  [
+    "role-hijack",
+    /\b(you are now|new instructions|new task:|from now on)\b|\b(act as|pretend to be|roleplay as|behave (?:like|as))\s+(?:a|an|the)?\s*(?:helpful\s+|unrestricted\s+|different\s+)?(?:ai|llm|model|assistant|agent|bot|chatbot|admin(?:istrator)?|root|superuser|sudoer|developer|engineer|operator|system|user|human|persona|character|dan)\b/i,
+  ],
   [
     "permission-escape",
     /bypasspermissions|dangerously-skip|--dangerously|allowedtools|permission-mode/i,

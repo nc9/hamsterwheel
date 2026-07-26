@@ -9,7 +9,9 @@
     "typecheck": "tsgo --noEmit"
   },
   "dependencies": {
+    "@hamsterwheel/config": "workspace:*",
     "@hamsterwheel/gate": "workspace:*",
+    "@hamsterwheel/runners": "workspace:*",
     "@hamsterwheel/sandbox": "workspace:*"
   }
 }

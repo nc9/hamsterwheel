@@ -1,0 +1,155 @@
+import type { SessionPlan } from "@hamsterwheel/gate";
+import {
+  type RunnerOutput,
+  type RunnerRole,
+  RUNNER_CAPABILITIES,
+  buildRunnerArgs,
+  parseRunnerOutput,
+} from "@hamsterwheel/runners";
+import {
+  SANDBOX_IMAGE,
+  SANDBOX_NETWORK,
+  buildSandboxArgs,
+  resolveSandboxEnv,
+  sandboxWorktreeMounts,
+  scanGitConfigForCredentials,
+} from "@hamsterwheel/sandbox";
+
+/**
+ * Spawning a headless agent session — the one place the driver crosses into an untrusted-code boundary.
+ *
+ * Two paths, both taking the SAME argv from buildRunnerArgs:
+ *  - in-process (default): scrubbed env, scoped tool allow-list. Defense-in-depth, NOT isolation.
+ *  - `--sandbox`: the argv is exec'd inside a rootless container with only the worktree + its git common
+ *    dir mounted and env crossing by name-only allow-list. This is the real boundary.
+ */
+
+// Drop obvious secret-bearing vars from the child env (defense-in-depth; NOT a substitute for OS
+// isolation — gh/git creds on disk are still reachable). GITHUB_TOKEN/GH_TOKEN go too: with `Bash(gh:*)`
+// allow-listed, an inherited token is an exfil/abuse vector, and the child's gh falls back to its own
+// stored config auth.
+const SECRET_ENV_RE =
+  /^(AWS_|GCP_|GOOGLE_|AZURE_|CLOUDFLARE_|CF_|OPENAI_|ANTHROPIC_API|STRIPE_|DATABASE_|INTERNAL_API|R2_|HYPERDRIVE|GITHUB_TOKEN|GH_TOKEN)/i;
+export const scrubbedEnv = (env: Record<string, string | undefined>): Record<string, string> =>
+  Object.fromEntries(
+    Object.entries(env).filter(([k, v]) => v !== undefined && !SECRET_ENV_RE.test(k)),
+  ) as Record<string, string>;
+
+export type SessionOptions = {
+  plan: SessionPlan;
+  role: RunnerRole;
+  prompt: string;
+  cwd: string;
+  timeoutMs: number;
+  allowedTools?: string[];
+  bypassPermissions?: boolean;
+  outputSchemaPath?: string;
+  sandbox?: boolean;
+  env?: Record<string, string | undefined>;
+  log?: (msg: string) => void;
+};
+
+export type SessionResult = RunnerOutput & { timedOut: boolean; stderr: string };
+
+const gitCommonDir = async (worktree: string): Promise<string> => {
+  const proc = Bun.spawn(
+    ["git", "-C", worktree, "rev-parse", "--path-format=absolute", "--git-common-dir"],
+    {
+      stdout: "pipe",
+      stderr: "ignore",
+    },
+  );
+  const out = await new Response(proc.stdout).text();
+  await proc.exited;
+  return out.trim();
+};
+
+/** Build the sandboxed `docker run …` argv for a session, failing closed on anything suspect. */
+const sandboxCommand = async (
+  worktree: string,
+  command: string[],
+  env: Record<string, string | undefined>,
+): Promise<{ argv: string[]; processEnv: Record<string, string> }> => {
+  const { forwardNames, processEnv } = resolveSandboxEnv(env);
+  const gitDir = await gitCommonDir(worktree);
+  // The git dir is mounted in — refuse if its config could carry host creds across or hijack the push
+  // away from the injected token.
+  const flags = scanGitConfigForCredentials(
+    await Bun.file(`${gitDir}/config`)
+      .text()
+      .catch(() => ""),
+  );
+  if (flags.length)
+    throw new Error(
+      `--sandbox: ${gitDir}/config carries credential-bearing config (${flags.join(", ")}) that would cross the mount ` +
+        "or hijack the push from the injected token. Refusing to run — remove it or use a clean-cloned repo.",
+    );
+  return {
+    argv: [
+      "docker",
+      ...buildSandboxArgs({
+        image: SANDBOX_IMAGE,
+        network: SANDBOX_NETWORK,
+        workdir: worktree, // identity-mounted, so cwd == the real worktree path
+        mounts: sandboxWorktreeMounts(worktree, gitDir),
+        forwardEnv: forwardNames,
+        command,
+      }),
+    ],
+    processEnv,
+  };
+};
+
+/**
+ * Run one headless session to completion. ALWAYS bounded by a wall-clock timeout and killed on expiry —
+ * a stalled session must never hold a board claim forever.
+ */
+export const runSession = async (opts: SessionOptions): Promise<SessionResult> => {
+  const env = opts.env ?? process.env;
+  const log = opts.log ?? (() => {});
+  const readOnly = opts.role === "review";
+  if (readOnly && !RUNNER_CAPABILITIES[opts.plan.runner].enforcesReadOnly)
+    log(
+      `  ⚠ ${opts.plan.runner} has no verified tool allow-list flag — the rubric grader is NOT tool-constrained. ` +
+        'Use --sandbox, or set runners.review.runner = "claude" for an enforced read-only grader.',
+    );
+
+  const command = buildRunnerArgs({
+    runner: opts.plan.runner,
+    role: opts.role,
+    prompt: opts.prompt,
+    cwd: opts.cwd,
+    model: opts.plan.model,
+    effort: opts.plan.effort,
+    allowedTools: opts.allowedTools,
+    readOnly,
+    bypassPermissions: opts.bypassPermissions,
+    outputSchemaPath: opts.outputSchemaPath,
+  });
+
+  let argv = command;
+  let spawnEnv = scrubbedEnv(env);
+  if (opts.sandbox) {
+    const s = await sandboxCommand(opts.cwd, command, env);
+    argv = s.argv;
+    spawnEnv = s.processEnv;
+    log(
+      `  🔒 [sandbox] ${opts.role} session in ${SANDBOX_IMAGE} (network ${SANDBOX_NETWORK}, worktree-only mount)`,
+    );
+  }
+
+  const proc = Bun.spawn(argv, { cwd: opts.cwd, env: spawnEnv, stdout: "pipe", stderr: "pipe" });
+  let timedOut = false;
+  const timer = setTimeout(() => {
+    timedOut = true;
+    proc.kill();
+  }, opts.timeoutMs);
+  const [stdout, stderr] = await Promise.all([
+    new Response(proc.stdout).text(),
+    new Response(proc.stderr).text(),
+  ]);
+  await proc.exited;
+  clearTimeout(timer);
+  const parsed = parseRunnerOutput(opts.plan.runner, { stdout, exitCode: proc.exitCode ?? 1 });
+  return { ...parsed, stderr, timedOut };
+};

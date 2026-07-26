@@ -1,73 +1,161 @@
 #!/usr/bin/env bun
 
-import { mergeDecision } from "@hamsterwheel/gate";
-import { buildSandboxArgs } from "@hamsterwheel/sandbox";
+import {
+  CONFIG_FILENAME,
+  type Config,
+  ConfigError,
+  findConfig,
+  loadConfig,
+} from "@hamsterwheel/config";
 
 import pkg from "../package.json";
+import { type ParsedArgs, parseArgs } from "./args.ts";
+import { loadBoardCtx } from "./board.ts";
+import {
+  type CommandDeps,
+  plan,
+  reconcile,
+  runTriagePasses,
+  triage,
+  workQueue,
+} from "./commands.ts";
+import { doctor } from "./doctor.ts";
+import { Gh } from "./gh.ts";
+import { init } from "./init.ts";
+import { runPrune } from "./prune.ts";
+import { createRunLog, makeRunId } from "./runlog.ts";
 
-/** "ready" once a package's real export links from the workspace, else "missing". */
-const wired = (exported: unknown): string => (typeof exported === "function" ? "ready" : "missing");
+const log = (...m: unknown[]) => console.log(...m);
 
-/** Subcommands the wheel will eventually spin. None are live yet. */
-export const PLANNED_COMMANDS = ["plan", "once", "run", "triage", "prune"] as const;
-type PlannedCommand = (typeof PLANNED_COMMANDS)[number];
-
-function isPlannedCommand(value: string): value is PlannedCommand {
-  return (PLANNED_COMMANDS as readonly string[]).includes(value);
-}
-
-function printVersion(): void {
-  console.log(pkg.version);
-}
-
-function printHelp(): void {
-  console.log(`🐹 hamsterwheel v${pkg.version}
+export const HELP = `🐹 hamsterwheel v${pkg.version}
 An autonomous issue loop for coding agents: you sleep, the hamster runs the wheel.
 
 Usage:
   hamsterwheel <command> [options]
 
-Commands (all not yet implemented):
-  plan     sketch the overnight run from your open issues
-  once     send a single issue around the wheel
-  run      run the loop until the backlog is clear
-  triage   sort and label the backlog
-  prune    clean up stale branches and worktrees
+Commands:
+  init       verify prerequisites, provision the board + labels, write ${CONFIG_FILENAME}
+  doctor     re-run just the prerequisite checks
+  plan       read-only: the eligible queue, skip reasons, and the resolved runner/model/effort
+  once       one issue end to end (claim → PR → gate → merge / Blocked)
+  run        loop \`once\` until the Ready queue is empty (serial)
+  triage     PM doctor + the auto-block passes (missing criteria, suspected injection)
+  reconcile  report in-flight items with no live session behind them
+  prune      classify and clean up stale local WIP salvage branches
 
 Flags:
-  --version, -v   print the version and exit
-  --help,    -h   show this help
+  --execute          do real work (once/run mutate the board only with this)
+  --issue <n>        target a specific Ready+eligible issue
+  --pr-only          stop at the open PR: skip the merge gate (supervised runs)
+  --sandbox          OS-isolate the sessions in a container
+  --bypass           claude: full bypassPermissions instead of the scoped allow-list (loud, supervised)
+  --sync             triage: add open issues missing from the board as Draft
+  --delete           prune: actually delete (default is a dry-run plan)
+  --yes / --dry-run  init: non-interactive / print-only
+  --config <path>    use a specific ${CONFIG_FILENAME}
+  --version, --help  version / help`;
 
-status: sandbox + gate ported; the loop driver lands next.
-engines wired -> sandbox:${wired(buildSandboxArgs)} gate:${wired(mergeDecision)}`);
-}
+/** Resolve the config for a board-backed command, or explain why we can't. */
+const resolveConfig = async (args: ParsedArgs): Promise<Config> => {
+  const path = args.configPath ?? (await findConfig(process.cwd()));
+  if (!path)
+    throw new ConfigError([
+      `no ${CONFIG_FILENAME} found from ${process.cwd()} upward — run \`hamsterwheel init\``,
+    ]);
+  return loadConfig(path);
+};
 
-/**
- * Parse argv and act. Returns the intended process exit code so this stays a
- * pure-ish function the tests can drive without tearing down the process.
- */
-export function main(argv: string[]): number {
-  const command = argv[2];
-
-  if (command === "--version" || command === "-v") {
-    printVersion();
+export const main = async (argv: string[]): Promise<number> => {
+  const args = parseArgs(argv);
+  if (args.unknown.length) {
+    console.error(
+      `unknown or malformed argument(s): ${args.unknown.join(", ")}\nrun \`hamsterwheel --help\`.`,
+    );
+    return 1;
+  }
+  if (args.version) {
+    log(pkg.version);
+    return 0;
+  }
+  if (args.help || args.command === null) {
+    log(HELP);
     return 0;
   }
 
-  if (command === undefined || command === "--help" || command === "-h") {
-    printHelp();
+  // Checked before anything reads config or touches GitHub: a `run` typed without --execute should cost
+  // nothing and change nothing.
+  if (args.command === "run" && !args.execute) {
+    log(
+      "⚠ `run` requires --execute to loop — use `once` for a single dry pass, or `plan` to inspect.",
+    );
+    return 1;
+  }
+
+  const gh = new Gh();
+  if (args.command === "init")
+    return init({ cwd: process.cwd(), yes: args.yes, dryRun: args.dryRun, log, gh });
+  if (args.command === "doctor") return doctor({ cwd: process.cwd(), log, gh });
+
+  const cfg = await resolveConfig(args);
+
+  // prune needs no board — it runs standalone, ahead of any project lookup.
+  if (args.command === "prune") {
+    log(`🐹 prune${args.delete ? " (--delete)" : " (dry run)"}`);
+    await runPrune(gh, cfg, { delete: args.delete, log });
     return 0;
   }
 
-  if (isPlannedCommand(command)) {
-    console.log("🐹 not yet implemented");
-    return 0;
-  }
+  const ctx = await loadBoardCtx(gh, cfg);
+  const readOnly = args.command === "plan" || args.command === "reconcile";
+  const deps: CommandDeps = {
+    gh,
+    cfg,
+    ctx,
+    log,
+    runLog: createRunLog({ dir: `${process.env.HOME}/.hamsterwheel/runs`, runId: makeRunId(0) }),
+    prOnly: args.prOnly,
+    sandbox: args.sandbox,
+    bypassPermissions: args.bypass,
+  };
+  log(
+    `🐹 hamsterwheel — ${cfg.repo} · project #${ctx.projectNumber} · ${args.command}${args.execute ? " (--execute)" : ""}`,
+  );
+  if (!readOnly) deps.runLog.append("start", { command: args.command, execute: args.execute });
 
-  console.error(`unknown command: ${command}\nrun \`hamsterwheel --help\` to see what's planned.`);
-  return 1;
-}
+  switch (args.command) {
+    case "plan":
+      await plan(deps);
+      return 0;
+    case "reconcile":
+      await reconcile(deps);
+      return 0;
+    case "triage":
+      await triage(deps, args.sync);
+      // The auto-block passes MUTATE the board, so they stay behind --execute like every other write.
+      if (args.execute) await runTriagePasses(deps);
+      else log("\n(read-only: pass --execute to apply the auto-block passes)");
+      return 0;
+    default: {
+      if (args.bypass && !args.sandbox)
+        log(
+          "⚠ --bypass without --sandbox: the session gets unrestricted tools with no isolation boundary.",
+        );
+      if (args.execute) await runTriagePasses(deps);
+      await workQueue(deps, {
+        loop: args.command === "run",
+        execute: args.execute,
+        issue: args.issue,
+      });
+      return 0;
+    }
+  }
+};
 
 if (import.meta.main) {
-  process.exit(main(process.argv));
+  try {
+    process.exit(await main(process.argv));
+  } catch (e) {
+    console.error(e instanceof ConfigError ? e.message : `✗ ${String(e)}`);
+    process.exit(1);
+  }
 }

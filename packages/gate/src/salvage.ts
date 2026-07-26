@@ -1,20 +1,17 @@
 import { $ } from "bun";
 
 // -B not -b: a re-run reuses the branch name (remove frees the dir, leaves the ref) and -b dies exit-255
-// on it. base ref is fixed to origin/main — re-runs branch off the latest merged main.
-export const worktreeAddArgs = (worktree: string, branch: string): string[] => [
-  "worktree",
-  "add",
-  worktree,
-  "-B",
-  branch,
-  "origin/main",
-];
+// on it. baseRef is the REMOTE base (default origin/main) so re-runs branch off the latest merged base.
+export const worktreeAddArgs = (
+  worktree: string,
+  branch: string,
+  baseRef = "origin/main",
+): string[] => ["worktree", "add", worktree, "-B", branch, baseRef];
 
 // Run-scoped WIP branch a failed session's work is salvaged onto. The runId (not the reused
-// loop/<n>-<slug> impl branch, which a retry's `-B` resets) is what makes it durable.
-export const wipBranchName = (issueNumber: number, runId: string): string =>
-  `loop/${issueNumber}-wip-${runId}`;
+// <prefix>/<n>-<slug> impl branch, which a retry's `-B` resets) is what makes it durable.
+export const wipBranchName = (issueNumber: number, runId: string, prefix = "loop"): string =>
+  `${prefix}/${issueNumber}-wip-${runId}`;
 
 // True if the worktree diverges from the base ref at all — committed OR uncommitted (tracked) changes,
 // or any untracked file. False = the session left the base untouched (already-resolved, not a failure).
@@ -71,17 +68,22 @@ export async function preserveWorktreeChanges(
 // a local WIP ref would just be a misleading duplicate). They accumulate forever since nothing else
 // deletes them. This sweep only ever reads/deletes LOCAL refs.
 
-// Matches ONLY the WIP salvage branch shape, not the reused loop/<n>-<slug> impl branch (no "-wip-"
-// segment) — the pattern anchor is what keeps prune from ever touching an unrelated loop/* branch.
+// Matches ONLY the WIP salvage branch shape, not the reused <prefix>/<n>-<slug> impl branch (no "-wip-"
+// segment) — the pattern anchor is what keeps prune from ever touching an unrelated <prefix>/* branch.
 export const WIP_BRANCH_RE = /^loop\/(\d+)-wip-(.+)$/;
+/** The same anchored shape for a configured branch prefix. The prefix is escaped: it is config, not a pattern. */
+export const wipBranchRe = (prefix = "loop"): RegExp =>
+  new RegExp(`^${prefix.replaceAll(/[.*+?^${}()|[\]\\]/g, "\\$&")}/(\\d+)-wip-(.+)$`);
 
 export type WipBranchInfo = { branch: string; issueNumber: number; runId: string };
 
-export const parseWipBranches = (names: string[]): WipBranchInfo[] =>
-  names.flatMap((branch) => {
-    const m = WIP_BRANCH_RE.exec(branch);
-    return m ? [{ branch, issueNumber: Number(m[1]), runId: m[2] }] : [];
+export const parseWipBranches = (names: string[], prefix = "loop"): WipBranchInfo[] => {
+  const re = wipBranchRe(prefix);
+  return names.flatMap((branch) => {
+    const m = re.exec(branch);
+    return m ? [{ branch, issueNumber: Number(m[1]), runId: m[2]! }] : [];
   });
+};
 
 export type PruneAction = "prune" | "keep";
 export type PruneDecision = WipBranchInfo & { action: PruneAction; reason: string };

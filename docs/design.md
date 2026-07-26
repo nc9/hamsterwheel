@@ -10,12 +10,12 @@ Thin **deterministic driver** + model-driven per-issue sessions. Safety-critical
 
 One project board is the single source of truth — no external tracker, no sync boundary.
 
-| Field | Type | Values |
-|---|---|---|
-| Status | single-select | Draft · Ready · In Progress · In Review · Blocked · Done |
-| Priority | single-select | P0 · P1 · P2 · P3 |
-| Size | single-select | XS · S · M · L · XL |
-| Owner | text | run-id of the claiming session |
+| Field          | Type          | Values                                                                                   |
+| -------------- | ------------- | ---------------------------------------------------------------------------------------- |
+| Status         | single-select | Draft · Ready · In Progress · In Review · Blocked · Done                                 |
+| Priority       | single-select | P0 · P1 · P2 · P3                                                                        |
+| Size           | single-select | XS · S · M · L · XL                                                                      |
+| Owner          | text          | run-id of the claiming session                                                           |
 | Blocked reason | single-select | needs-criteria · needs-prod-migration · needs-decision · dep-open · ci-red · rubric-fail |
 
 Status semantics (the whole human⇄loop interface):

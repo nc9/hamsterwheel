@@ -14,9 +14,9 @@ jobs:
       - run: bun install --frozen-lockfile
       - run: bun test
       - run: bun run lint
-      - name: typecheck apps/cli
-        run: cd apps/cli && bunx tsgo --noEmit
-      - name: typecheck packages/sandbox
-        run: cd packages/sandbox && bunx tsgo --noEmit
-      - name: typecheck packages/gate
-        run: cd packages/gate && bunx tsgo --noEmit
+      - name: typecheck
+        run: |
+          for pkg in packages/runners packages/gate packages/config packages/sandbox apps/cli; do
+            echo "── $pkg"
+            (cd "$pkg" && bunx tsgo --noEmit)
+          done

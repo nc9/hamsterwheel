@@ -64,6 +64,7 @@ export {
   type PruneAction,
   type PruneDecision,
   WIP_BRANCH_RE,
+  wipBranchRe,
   wipBranchName,
   parseWipBranches,
   classifyWipBranch,

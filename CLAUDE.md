@@ -37,6 +37,10 @@ Extracted from a production loop that ran overnight autonomous implementation wa
 - Execution-dependent criteria ("tests pass", "typecheck clean") are OWNED by the deterministic CI gate; a read-only grader physically can't run them and will false-fail correct PRs. Credit them in code once CI is green (`applyCiToRubric`) — prompt instructions alone don't bind an LLM.
 - Parse LLM JSON verdicts by scanning back from the last `}` with brace matching; models wrap JSON in prose.
 
+### Run-fatal vs issue-fatal
+- A failure about THIS issue blocks THIS issue. A precondition that would fail identically for every item (sandbox credentials, docker, a runner binary, gh auth, a missing board field, a broken install command) is RUN-FATAL: abort the run, release the claim back to Ready, touch nothing else. `run --execute --sandbox` without the token once failed closed *per issue* and burned an entire curated Ready queue into Blocked in under a minute — the fail-closed was right, the per-issue blame was not. Check every such precondition once in a preflight so the run refuses to start.
+- Unattended sessions need approval bypass at EVERY layer. A harness tool allow-list does not cover a runner's own consent model: codex needs `approval_policy="never"` + an explicit `--sandbox` mode, opencode needs `--auto`. Bake them into the argv, never into a README instruction.
+
 ### Session outcomes
 
 - An implement session ends exactly 4 ways: PR url · explicit already-resolved signal · clean empty no-op · failure. A clean no-op with NO signal is only a CANDIDATE "already resolved" — corroborate with a prior merged PR that closes the issue, else block: a clean no-op is indistinguishable from a silent give-up or refusal.
@@ -48,12 +52,20 @@ Extracted from a production loop that ran overnight autonomous implementation wa
 - Before removing a failed session's worktree, salvage the dirty tree onto a run-scoped WIP branch (`loop/<n>-wip-<runid>` — run-scoped because a retry's `-B` resets the reusable impl branch). Verify the salvage actually captured everything before claiming it did; a false "preserved" is worse than none.
 - Skip salvage once the branch is pushed — the remote is the durable copy; a local duplicate is a misleading signal.
 - Prune salvage branches conservatively: delete only on "issue affirmatively closed AND confirmed not the head of an open PR". A failed lookup is NOT a passed safety check — keep.
+- Delete branches from an explicit classified LIST, never a glob. A `for-each-ref 'refs/heads/fix/*' | xargs branch -D` meant for 10 branches deleted ~54, including unmerged local-only work from prior months; the `(was <sha>)` git prints was the only reason it was recoverable — log it. When auditing such a sha, note a squash-merged tip is NOT an ancestor of main, so `merge-base --is-ancestor` reports false loss.
+- Push with an explicit refspec (`git push origin <branch>:<branch>`) everywhere. With `push.default=upstream` and a worktree branched off `origin/<base>`, a bare `git push -u origin <branch>` resolves its DESTINATION from the upstream and writes the base branch — seven accidental direct-to-main pushes in the source repo, two via agents. `-u` doesn't save you, and the protect-main hook printed "Passed". `git branch --unset-upstream` right after `worktree add` makes an unpinned push fail loudly.
+- Diff against the merge-base, not `origin/<base>`. Linked worktrees share one ref store, so a peer lane's fetch advances the ref and a diff-based review then reports other lanes' merged work, reversed, as your regressions. Sanity check: if `git diff origin/<base> --stat` lists files the branch never touched, the base is stale.
 - Worktrees: `worktree add -B` not `-b` (re-runs reuse the branch name), `git worktree prune` first (dir-less registrations block `-B`), fetch the base branch per issue so late items branch off the latest merged main.
+
+### Bounded review rounds
+- Cap review-fix rounds at 4. The reviewer is stateless and re-derives from scratch, so each fix push triggers a deeper pass and it never converges: on a ~50-line PR, 6 rounds with findings 3→6→3→3→3→3, nothing substantive after round 3-4, then objections to flags and identifiers that do not exist. Exit mechanic: a PR *comment* does not trigger re-review, only a push does — post the remaining findings with citations and stop committing.
+- Whatever produced a signal must be what re-verifies it. A fix loop fed review findings but re-checking only the typechecker exits on a stale signal and reports already-fixed bugs as unresolved.
 
 ### Operating at scale (parallel waves)
 
 - Parallel agents idle silently after opening a PR — they don't poll CI. Never re-ping an idle agent; reconcile from repo state (branch sha moved? PR exists? checks green?).
 - N lanes polling GitHub exhaust the GraphQL quota (~20 min lockout). GraphQL and REST "core" are separate per-token pools, and `gh api rate_limit` reads both for free; everything PR-shaped (create, checks, comments, merge) has a REST equivalent. REST-first for PR ops in anything parallel; batch board mutations (Projects v2 is GraphQL-only) to start/end sweeps.
+- `cancel-in-progress` is correct for tests and catastrophic for deploys. Six back-to-back merges each cancelled the previous run, so five intermediate merges' deploy jobs never executed and five services stayed on stale code. If a merge has side effects, it cannot share a cancellable concurrency group with CI.
 - Parallel branches off the same base collide on generated sequence numbers (e.g. migration files). Whoever merges second regenerates — never hand-renumber.
 - Stacked PRs: merging a parent with `--delete-branch` auto-closes its children. Merge children first, or retarget before the parent merges.
 - Before declaring a merge train done, the open-PR count must be zero. Phase lists drift; the zero check doesn't.

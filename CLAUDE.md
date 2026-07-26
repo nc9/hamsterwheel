@@ -6,9 +6,11 @@ Extracted from a production loop that ran overnight autonomous implementation wa
 
 ## Workspace
 
-- `apps/cli` — the `hamsterwheel` CLI (bun; the loop driver lands here)
+- `apps/cli` — the `hamsterwheel` CLI + loop driver (`init`/`doctor`/`plan`/`once`/`run`/`triage`/`reconcile`/`prune`)
 - `packages/sandbox` — docker sandbox runner: argv builder, env resolution, git-config credential scan, image + entrypoint
-- `packages/gate` — pure, tested policy: merge decision, rubric/CI reconciliation, outcome classification, injection screen, salvage/prune
+- `packages/gate` — pure, tested policy: merge decision, rubric/CI reconciliation, outcome classification, injection screen, salvage/prune, queue selection, label-driven runner/model/effort routing
+- `packages/runners` — claude/codex/opencode abstraction: pure argv builder, per-runner effort/model allow-lists, output normalization, PATH detection
+- `packages/config` — `hamsterwheel.toml` schema, validation and loader
 
 ## Development
 
@@ -70,8 +72,8 @@ Target driver architecture: `docs/design.md`.
 
 ## What's next
 
-1. Config-driven driver in `apps/cli`: `hamsterwheel.toml` (repo, project board, review bot, migration path regex, allowed tools, branch prefix, install cmd, model policy) behind `plan` / `once` / `run` / `triage` / `prune`. See `docs/design.md`.
-2. Board bootstrap (`hamsterwheel init`): idempotent GitHub Projects v2 provisioning (Status options, Owner, Blocked reason).
+1. Wave mode: parallel lanes encoding the at-scale lessons above (REST-first PR ops, merge queue, dependency-aware scheduling).
+2. Post-merge hooks: wait for the deploy workflow, run `smoke_cmd`, notify on failure (never auto-rollback).
 3. Sandbox follow-ups: deny-by-default egress proxy, per-run GitHub App token minting, hermetic in-container clone.
-4. Wave mode: parallel lanes encoding the at-scale lessons above.
+4. Review loop: iterate on review findings before the rubric gate (currently a blocking finding parks the PR for a human).
 5. npm publish decision (`hamsterwheel` is free on npm; `@hamsterwheel/*` scope needs the org).

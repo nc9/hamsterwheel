@@ -26,6 +26,9 @@
     "packages/gate": {
       "name": "@hamsterwheel/gate",
       "version": "0.0.1",
+      "dependencies": {
+        "@hamsterwheel/runners": "workspace:*",
+      },
     },
     "packages/runners": {
       "name": "@hamsterwheel/runners",

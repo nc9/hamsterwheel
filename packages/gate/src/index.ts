@@ -35,6 +35,31 @@ export {
   buildRubricPrompt,
 } from "./prompts.ts";
 export {
+  type SelectableIssue,
+  PRIORITY_RANK,
+  SIZE_RANK,
+  UNKNOWN_SIZE_RANK,
+  UNKNOWN_PRIORITY_RANK,
+  priorityRank,
+  sizeRank,
+  compareIssues,
+  parseDeps,
+  hasAcceptanceCriteria,
+  isEpicTitle,
+} from "./select.ts";
+export {
+  type PolicySource,
+  type SessionPlan,
+  type ResolvedPolicy,
+  type RoleDefaults,
+  type PolicyDefaults,
+  LABEL_PREFIXES,
+  sessionTier,
+  pickSessionModel,
+  resolveSessionPolicy,
+  formatSessionPlan,
+} from "./policy.ts";
+export {
   type WipBranchInfo,
   type PruneAction,
   type PruneDecision,

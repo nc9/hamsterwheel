@@ -41,7 +41,11 @@ export const deleteBranch = async (branch: string): Promise<{ ok: boolean; error
   return { ok: r.exitCode === 0, error: r.stderr.toString().trim().slice(0, 200) };
 };
 
-/** Run the configured install command in a fresh worktree (raw `worktree add` skips any session hooks). */
+/**
+ * Run the configured install command in a fresh worktree (raw `worktree add` skips any session hooks).
+ * Split on whitespace and spawned WITHOUT a shell — no pipes, `&&` or globbing. A command needing those
+ * belongs in a script the config points at.
+ */
 export const runInstall = async (cmd: string, cwd: string): Promise<void> => {
   const parts = cmd.split(/\s+/).filter(Boolean);
   if (!parts.length) return;

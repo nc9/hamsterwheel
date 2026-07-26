@@ -184,6 +184,10 @@ export const workQueue = async (
     return;
   }
 
+  // An issue the tick declined to work (already claimed, rolled back to Ready) stays at the head of the
+  // queue, so without this the loop would re-pick it every tick until max_iterations. One attempt per
+  // issue per invocation.
+  const attempted = new Set<number>();
   let iter = 0;
   do {
     // Backstop: never loop forever (e.g. an item that always rolls back to Ready).
@@ -192,10 +196,12 @@ export const workQueue = async (
       break;
     }
     const { eligible } = await buildQueue(gh, cfg, await listItems(gh, ctx));
-    if (!eligible.length) {
+    const next = eligible.find((i) => !attempted.has(i.number));
+    if (!next) {
       log("queue empty — idle");
       break;
     }
-    await claimAndRun(loopDeps, eligible[0]!, opts.execute);
+    attempted.add(next.number);
+    await claimAndRun(loopDeps, next, opts.execute);
   } while (opts.loop);
 };

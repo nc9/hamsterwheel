@@ -18,7 +18,7 @@ import {
 } from "@hamsterwheel/gate";
 import { RUNNER_CAPABILITIES, contractLine } from "@hamsterwheel/runners";
 
-import { type BoardCtx, comment, setBlocked, setOwner, setStatus } from "./board.ts";
+import { type BoardCtx, clearOwner, comment, setBlocked, setOwner, setStatus } from "./board.ts";
 import type { Gh } from "./gh.ts";
 import { addWorktree, fetchBase, pruneWorktrees, removeWorktree, runInstall } from "./git.ts";
 import { type LoopIssue, branchName, findPriorClosingPr } from "./issues.ts";
@@ -93,7 +93,9 @@ export const waitForChecks = async (
       const passing = rel.filter((c) => c.conclusion === "SUCCESS").map(checkName);
       return { green: failing.length === 0, failing, passing };
     }
-    // A timeout is NOT green: an unfinished CI run has proved nothing.
+    // A timeout is NOT green: an unfinished CI run has proved nothing. A repo with NO checks at all also
+    // lands here (nothing ever completes), which parks the PR as ci-red — deliberate: a loop that merges
+    // without a deterministic gate has no gate.
     if (now() > deadline)
       return { green: false, failing: ["<timeout waiting for CI>"], passing: [] };
     await sleep(30_000);
@@ -257,7 +259,8 @@ export const runImplement = async (
 
   if (!deps.sandbox) {
     // A fresh worktree has no dependencies — install so the session can typecheck and test. The sandbox
-    // path installs inside the container instead (Linux-native modules over the mounted worktree).
+    // path installs inside the container instead (Linux-native modules over the mounted worktree) — note
+    // the image entrypoint hardcodes `bun install` there, so config's install_cmd applies to this path only.
     log(`  installing deps in worktree (${cfg.installCmd}) …`);
     await runInstall(cfg.installCmd, worktree);
   }
@@ -307,7 +310,7 @@ export const runImplement = async (
 
 /**
  * One issue, claim → merge/Blocked. The invariants here are the expensive ones:
- *  - the claim is a compare-and-set on the Owner field, and every claim step rolls back on failure;
+ *  - the claim is guarded on the Owner field, and a partial claim is fully rolled back (status AND owner);
  *  - a failed session's dirty worktree is salvaged to a run-scoped WIP branch BEFORE teardown;
  *  - once the branch is pushed, salvage is skipped (the remote is the durable copy);
  *  - the worktree is always removed, success or failure.
@@ -330,8 +333,9 @@ export const claimAndRun = async (
     return;
   }
 
-  // Compare-and-set: a non-empty Owner means another run already holds this item. Serial mode can't
-  // collide, but a second driver (or a leftover claim) must not be stomped.
+  // Claim guard: a non-empty Owner means another run already holds this item. This is a read-then-write,
+  // NOT an atomic compare-and-set (Projects v2 has no conditional field update) — serial execution is what
+  // actually makes double-claims impossible; this only stops a second driver or a leftover claim being stomped.
   if (iss.owner?.trim()) {
     log(`  ⤳ #${iss.number} already claimed by run ${iss.owner.trim()} — skipping`);
     return;
@@ -349,8 +353,11 @@ export const claimAndRun = async (
     );
     deps.runLog.append("claim", { issue: iss.number, branch, worktree });
   } catch (e) {
-    // Roll the claim back so the item isn't orphaned In Progress with no live session behind it.
+    // Roll the claim back so the item isn't orphaned In Progress with no live session behind it. The
+    // OWNER must be cleared too: a half-claim (owner written, comment failed) would leave the item Ready
+    // with a live-looking owner, and the claim guard above would then skip it forever.
     await setStatus(gh, ctx, iss.itemId, cfg.board.status.ready).catch(() => {});
+    await clearOwner(gh, ctx, iss.itemId).catch(() => {});
     log(
       `  ✗ claim failed for #${iss.number}, rolled back to ${cfg.board.status.ready}: ${String(e).slice(0, 160)}`,
     );

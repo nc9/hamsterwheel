@@ -40,6 +40,8 @@ describe("parseConfig — defaults", () => {
     expect(c.board.status.inProgress).toBe("In Progress");
     expect(c.board.blockedReasons.needsCriteria).toBe("needs-criteria");
     expect(c.review.bot).toBe("claude[bot]");
+    // Deliberately the looser default: `required` would wedge every repo without a review bot.
+    expect(c.review.mode).toBe("optional");
     expect(c.runners.implement.runner).toBe("claude");
     expect(c.sessionTimeoutMs).toBe(3_600_000);
     expect(c.worktreeRoot).toBe("/home/ci/.hamsterwheel/worktrees");
@@ -128,6 +130,20 @@ describe("parseConfig — value validation", () => {
     expect(p.join()).toContain("branch_prefix");
     expect(p.join()).toContain("session_timeout_ms");
     expect(p.join()).toContain("allowed_tools");
+  });
+
+  test("review.mode accepts each valid value, case-insensitively", () => {
+    for (const mode of ["required", "optional", "off"] as const)
+      expect(parseConfig(withOver({ review: { mode } }), { home: "/h" }).review.mode).toBe(mode);
+    expect(parseConfig(withOver({ review: { mode: "OFF" } }), { home: "/h" }).review.mode).toBe(
+      "off",
+    );
+  });
+
+  test("an unknown review.mode is rejected, naming the valid values", () => {
+    const p = problems(withOver({ review: { mode: "sometimes" } })).join();
+    expect(p).toContain("review.mode");
+    expect(p).toContain("required | optional | off");
   });
 
   test("an unknown runner is rejected by name", () => {

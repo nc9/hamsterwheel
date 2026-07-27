@@ -24,7 +24,10 @@ describe("detectSetupCommand", () => {
 
   test("conductor.json scripts.setup wins over everything", async () => {
     const d = dir();
-    await writeFile(join(d, "conductor.json"), JSON.stringify({ scripts: { setup: "pnpm install" } }));
+    await writeFile(
+      join(d, "conductor.json"),
+      JSON.stringify({ scripts: { setup: "pnpm install" } }),
+    );
     await writeFile(join(d, "bun.lock"), "");
     expect(await detectSetupCommand(d)).toEqual({
       cmd: "pnpm install",

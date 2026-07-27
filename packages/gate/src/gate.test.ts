@@ -504,8 +504,10 @@ describe("mergeDecision", () => {
   const base = {
     ciGreen: true,
     humanRules: [] as string[],
+    reviewRequired: true,
     reviewObserved: true,
     blockingReview: 0,
+    changesRequested: false,
     rubricPass: true,
   };
   test("all clear → MERGE", () => expect(mergeDecision(base).action).toBe("MERGE"));
@@ -546,5 +548,56 @@ describe("mergeDecision", () => {
     const d = mergeDecision({ ...base, rubricPass: false });
     expect(d).toMatchObject({ action: "BLOCK", reason: "rubric-fail" });
     if (d.action === "BLOCK") expect(d.detail).toMatch(/criteria/i);
+  });
+
+  describe("review.mode", () => {
+    // The point of `optional`: a repo with no review bot must still be able to merge on CI + rubric,
+    // rather than parking every PR forever with a reason that reads like a broken reviewer.
+    test("optional: an unreviewed head merges when CI and the rubric are clean", () => {
+      expect(mergeDecision({ ...base, reviewRequired: false, reviewObserved: false }).action).toBe(
+        "MERGE",
+      );
+    });
+    test("optional: findings that DO exist still block", () => {
+      const d = mergeDecision({
+        ...base,
+        reviewRequired: false,
+        reviewObserved: true,
+        blockingReview: 1,
+      });
+      expect(d).toMatchObject({ action: "BLOCK", reason: "needs-decision" });
+    });
+    test("optional does not weaken any other gate", () => {
+      const loose = { ...base, reviewRequired: false, reviewObserved: false };
+      expect(mergeDecision({ ...loose, ciGreen: false }).action).toBe("BLOCK");
+      expect(mergeDecision({ ...loose, rubricPass: false }).action).toBe("BLOCK");
+      expect(mergeDecision({ ...loose, humanRules: ["prod-migration"] }).action).toBe("BLOCK");
+    });
+    test("required is unchanged: an unreviewed head still blocks", () => {
+      expect(mergeDecision({ ...base, reviewObserved: false }).action).toBe("BLOCK");
+    });
+
+    // A human hitting "Request changes" outranks config saying reviews are optional. Under `off` the
+    // signal is never fetched, so this only distinguishes required/optional — by design.
+    test("changes-requested blocks whether review is required or optional", () => {
+      for (const reviewRequired of [true, false]) {
+        const d = mergeDecision({ ...base, reviewRequired, changesRequested: true });
+        expect(d).toMatchObject({ action: "BLOCK", reason: "needs-decision" });
+        if (d.action === "BLOCK") expect(d.detail).toMatch(/requested changes/i);
+      }
+    });
+    test("changes-requested outranks a clean review and a passing rubric", () => {
+      const d = mergeDecision({ ...base, changesRequested: true, reviewObserved: true });
+      expect(d).toMatchObject({ action: "BLOCK", reason: "needs-decision" });
+      if (d.action === "BLOCK") expect(d.detail).toMatch(/requested changes/i);
+    });
+    test("CI and human rules still outrank changes-requested", () => {
+      expect(mergeDecision({ ...base, changesRequested: true, ciGreen: false })).toMatchObject({
+        reason: "ci-red",
+      });
+      expect(
+        mergeDecision({ ...base, changesRequested: true, humanRules: ["prod-migration"] }),
+      ).toMatchObject({ reason: "needs-human" });
+    });
   });
 });

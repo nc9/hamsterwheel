@@ -32,7 +32,10 @@ export const COMMAND_DOCS: Record<Command, CommandDoc> = {
       ["0", "setup complete (or dry run printed)"],
       ["1", "a blocking prerequisite failed, or non-interactive without --yes/--dry-run"],
     ],
-    examples: ["hamster init --dry-run", 'hamster init --yes --project-title "backend Loop" --json'],
+    examples: [
+      "hamster init --dry-run",
+      'hamster init --yes --project-title "backend Loop" --json',
+    ],
   },
   doctor: {
     summary: "re-run just the prerequisite checks",

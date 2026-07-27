@@ -239,6 +239,34 @@ export type ReviewState = {
   blocking: string[];
   /** A review comment postdates the head commit. False = no review of this code; NOT the same as clean. */
   observed: boolean;
+  /** Some reviewer's latest submitted review is CHANGES_REQUESTED. Blocks in every review mode. */
+  changesRequested: boolean;
+};
+
+/**
+ * Is any reviewer currently requesting changes? GitHub's own semantics: a reviewer's LATEST submitted
+ * review wins, so an earlier CHANGES_REQUESTED that the same person followed with APPROVED is spent.
+ *
+ * Deliberately not scoped to the review bot. This is the signal a human leaves when the prose channel
+ * fails them — a human will not write `(high)` unprompted, so their objection would otherwise parse as
+ * clean text and merge. Reviews with no state transition (COMMENTED, PENDING, DISMISSED) are ignored:
+ * only APPROVED and CHANGES_REQUESTED move a reviewer's position.
+ */
+export const changesRequestedBy = (
+  reviews: { user?: { login?: string }; state?: string; submitted_at?: string }[],
+): string[] => {
+  const latest = new Map<string, { state: string; at: string }>();
+  for (const rv of reviews) {
+    const login = rv.user?.login;
+    const state = rv.state?.toUpperCase();
+    if (!login || (state !== "APPROVED" && state !== "CHANGES_REQUESTED")) continue;
+    const at = rv.submitted_at ?? "";
+    const prev = latest.get(login);
+    // ISO-8601 UTC sorts lexicographically. Missing timestamps compare as oldest, so a dated review
+    // always beats an undated one rather than depending on array order.
+    if (!prev || at >= prev.at) latest.set(login, { state, at });
+  }
+  return [...latest].filter(([, v]) => v.state === "CHANGES_REQUESTED").map(([login]) => login);
 };
 
 /** Tolerant parse of the jq projection below — a malformed/absent body must read as "no review". */
@@ -257,14 +285,27 @@ export const fetchBlockingReview = async (
   cfg: Config,
   prNum: number,
 ): Promise<ReviewState> => {
+  // `off` short-circuits before any network call — that is the mode's whole purpose. `observed: true`
+  // is the honest value here only because the gate never reads it when review is not required; it must
+  // not be taken as "a review happened".
+  if (cfg.review.mode === "off") return { blocking: [], observed: true, changesRequested: false };
   // Latest bot body AND its timestamp. The timestamp is the load-bearing part: the body alone cannot
   // distinguish "reviewed and clean" from "never reviewed" from "reviewed two commits ago".
   const jq = `[.[]|select(.user.login=="${cfg.review.bot}")]|last|{body:(.body // ""),at:(.created_at // .submitted_at // "")}`;
   const botComment = parseBotComment(
     await gh.tryText(["api", `repos/${cfg.repo}/issues/${prNum}/comments`, "--jq", jq]),
   );
-  const review = parseBotComment(
-    await gh.tryText(["api", `repos/${cfg.repo}/pulls/${prNum}/reviews`, "--jq", jq]),
+  const reviewsPath = `repos/${cfg.repo}/pulls/${prNum}/reviews`;
+  const review = parseBotComment(await gh.tryText(["api", reviewsPath, "--jq", jq]));
+  // Separate read of the same endpoint: the jq above narrows to the review BOT, but a changes-requested
+  // veto is meaningful from anyone.
+  const vetoes = changesRequestedBy(
+    (await gh.tryJson<{ user?: { login?: string }; state?: string; submitted_at?: string }[]>([
+      "api",
+      reviewsPath,
+      "--jq",
+      "[.[]|{user:{login:.user.login},state:.state,submitted_at:.submitted_at}]",
+    ])) ?? [],
   );
   const headAt =
     (await gh.tryText([
@@ -287,6 +328,7 @@ export const fetchBlockingReview = async (
       cfg.review.blockingSeverityRe,
     ),
     observed: reviewCoversHead(latestAt, headAt.trim()),
+    changesRequested: vetoes.length > 0,
   };
 };
 
@@ -447,21 +489,35 @@ export const runMergeGate = async (
     // didn't. Re-evaluate against the final head, not the pre-round one.
     if (r.rounds > 0) humanRules = await firedHumanRules(gh, cfg, prNum, iss.number, iss.labels);
   }
-  if (!review.observed)
+  const reviewRequired = cfg.review.mode === "required";
+  if (!review.observed && cfg.review.mode !== "off")
     log(
-      "  ⚠ gate: no review comment postdates the head commit — treating as UNREVIEWED, not clean. " +
-        "A review action that skips (e.g. on workflow-file changes) still reports its check green.",
+      reviewRequired
+        ? "  ⚠ gate: no review comment postdates the head commit — treating as UNREVIEWED, not clean. " +
+            "A review action that skips (e.g. on workflow-file changes) still reports its check green."
+        : `  · gate: no review of the current head; review.mode = ${cfg.review.mode}, so CI and the rubric decide.`,
     );
+  if (review.changesRequested) log("  ⚠ gate: a reviewer requested changes — parking for a human.");
   let rubricPass = false;
-  if (ci.green && !humanRules.length && review.observed && !review.blocking.length) {
+  // Skip the rubric only when something already blocks. Under `optional` an unobserved review is not
+  // one of those things, so the grader still runs and still has to pass.
+  if (
+    ci.green &&
+    !humanRules.length &&
+    !review.changesRequested &&
+    (review.observed || !reviewRequired) &&
+    !review.blocking.length
+  ) {
     log("  gate: CI green, no human rule fired, review clean → running rubric…");
     rubricPass = (await runRubric(deps, iss, prNum, worktree, ci)).pass;
   }
   const decision = mergeDecision({
     ciGreen: ci.green,
     humanRules,
+    reviewRequired,
     reviewObserved: review.observed,
     blockingReview: review.blocking.length,
+    changesRequested: review.changesRequested,
     rubricPass,
   });
   deps.runLog.append("gate", {
@@ -470,8 +526,10 @@ export const runMergeGate = async (
     ciGreen: ci.green,
     failing: ci.failing,
     humanRules,
+    reviewMode: cfg.review.mode,
     reviewObserved: review.observed,
     blockingReview: review.blocking.length,
+    changesRequested: review.changesRequested,
     reviewRounds: rounds,
     rubricPass,
     decision,

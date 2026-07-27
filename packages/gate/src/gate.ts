@@ -61,13 +61,26 @@ export type GateSignals = {
   ciGreen: boolean;
   /** Names of fired `[[human]]` rules (`matchHumanRules`). Any entry parks the PR for a human. */
   humanRules: string[];
+  /**
+   * `review.mode === "required"`. When false, a missing review is not a blocker — findings that DO
+   * exist still are. Passed in rather than read from config so the decision stays a pure function.
+   */
+  reviewRequired: boolean;
   /** False when no review comment postdates the head commit. Absence of findings is NOT approval. */
   reviewObserved: boolean;
   blockingReview: number;
+  /**
+   * A reviewer's latest submitted review is CHANGES_REQUESTED — a human explicitly withholding
+   * approval, which unlike prose findings carries no severity to weigh. Blocks regardless of whether
+   * review is `required` or `optional`. Under `off` it is never fetched, so it can never be set:
+   * `off` means the gate does not look at reviews at all (see `ReviewMode`).
+   */
+  changesRequested: boolean;
   rubricPass: boolean;
 };
 export type GateAction = { action: "MERGE" } | { action: "BLOCK"; reason: string; detail: string };
-// Deterministic merge decision. Order: CI (fundamental) → human rules (safety) → review (safety) → rubric.
+// Deterministic merge decision. Order: CI (fundamental) → human rules (safety) → changes-requested →
+// review provenance (mode-gated) → review findings → rubric.
 export const mergeDecision = (s: GateSignals): GateAction => {
   if (!s.ciGreen) return { action: "BLOCK", reason: "ci-red", detail: "CI not green" };
   if (s.humanRules.length > 0)
@@ -76,9 +89,18 @@ export const mergeDecision = (s: GateSignals): GateAction => {
       reason: "needs-human",
       detail: `matched human-review rule(s): ${s.humanRules.join(", ")} — a human reviews/applies, then merges`,
     };
+  // Ahead of the mode check: a human hitting "Request changes" outranks any configuration saying
+  // reviews are optional. GitHub keeps that state until the reviewer re-reviews, so it is not aged out
+  // against the head — being stale is exactly what "I asked for changes and nobody came back" means.
+  if (s.changesRequested)
+    return {
+      action: "BLOCK",
+      reason: "needs-decision",
+      detail: "a reviewer requested changes",
+    };
   // Before trusting a clean review, require evidence one happened. Ordered ahead of the findings check
   // so a stale-but-clean comment can never stand in for a review of the code being merged.
-  if (!s.reviewObserved)
+  if (s.reviewRequired && !s.reviewObserved)
     return {
       action: "BLOCK",
       reason: "needs-decision",

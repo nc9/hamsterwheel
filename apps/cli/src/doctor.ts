@@ -1,7 +1,13 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 
-import { CONFIG_FILENAME, ConfigError, findConfig, loadConfig } from "@hamsterwheel/config";
+import {
+  CONFIG_FILENAME,
+  type Config,
+  ConfigError,
+  findConfig,
+  loadConfig,
+} from "@hamsterwheel/config";
 import { detectRunners, git, systemRunnerLookup, whichBin } from "@hamsterwheel/runners";
 
 import { Gh } from "./gh.ts";
@@ -53,6 +59,57 @@ export const worktreeReadiness = async (root: string): Promise<Check> => {
     status: "ok",
     detail: `${WORKTREE_INCLUDE_FILE} present (${patterns.length} pattern(s), covers ${envish.length} env-style file(s))`,
   };
+};
+
+/**
+ * Report the active review mode and, under `required`, whether the configured reviewer has ever
+ * actually posted on this repo.
+ *
+ * This exists because `required` + a reviewer who never posts is a SILENT wedge: every PR parks as
+ * needs-decision with "no review of the current head", which is indistinguishable from a review bot
+ * that is merely broken. Turning that into a named diagnosis is the whole value of the check.
+ */
+export const reviewReadiness = async (gh: Gh, cfg: Config): Promise<Check> => {
+  const name = "review gate";
+  if (cfg.review.mode === "off")
+    return {
+      name,
+      status: "ok",
+      detail: "mode = off — reviews are not fetched; CI + rubric decide",
+    };
+  if (cfg.review.mode === "optional")
+    return {
+      name,
+      status: "ok",
+      detail: `mode = optional — a review by ${cfg.review.bot} is honoured if present, not required`,
+    };
+  // `search/issues` finds PRs this login commented on, which is exactly "has this reviewer ever spoken
+  // here". A null result means the search failed (rate limit, auth) — that is unknown, not absent.
+  const found = await gh.tryJson<{ total_count?: number }>([
+    "api",
+    "-X",
+    "GET",
+    "search/issues",
+    "-f",
+    `q=repo:${cfg.repo} is:pr commenter:${cfg.review.bot}`,
+    "-f",
+    "per_page=1",
+  ]);
+  if (found === null)
+    return {
+      name,
+      status: "warn",
+      detail: `mode = required, reviewer ${cfg.review.bot} — could not verify it has ever posted (search failed)`,
+    };
+  return (found.total_count ?? 0) > 0
+    ? { name, status: "ok", detail: `mode = required, reviewer ${cfg.review.bot} has posted here` }
+    : {
+        name,
+        status: "fail",
+        detail:
+          `mode = required but ${cfg.review.bot} has never commented on a PR in ${cfg.repo} — ` +
+          `every PR will park as needs-decision. Set review.mode = "optional", or fix the reviewer.`,
+      };
 };
 
 export const runChecks = async (opts: { cwd: string; gh?: Gh }): Promise<Check[]> => {
@@ -166,6 +223,7 @@ export const runChecks = async (opts: { cwd: string; gh?: Gh }): Promise<Check[]
         p.number === cfg.project.number ||
         (cfg.project.title !== undefined && p.title === cfg.project.title),
     );
+    checks.push(await reviewReadiness(gh, cfg));
     checks.push(
       project
         ? { name: "project board", status: "ok", detail: `#${project.number} "${project.title}"` }

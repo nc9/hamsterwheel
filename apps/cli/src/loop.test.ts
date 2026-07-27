@@ -8,6 +8,7 @@ import { itemField, listItems, loadBoardCtx, setBlocked, setStatus } from "./boa
 import { parseTokenScopes } from "./doctor.ts";
 import { type ExecResult, Gh, type GhExec } from "./gh.ts";
 import { branchName, buildQueue } from "./issues.ts";
+import { changesRequestedBy } from "./pipeline.ts";
 
 const cfg = parseConfig(
   Bun.TOML.parse(`
@@ -272,5 +273,73 @@ describe("parseTokenScopes", () => {
       "repo",
     ]);
     expect(parseTokenScopes("Logged in to github.com")).toEqual([]);
+  });
+});
+
+describe("changesRequestedBy", () => {
+  const rv = (login: string, state: string, submitted_at: string) => ({
+    user: { login },
+    state,
+    submitted_at,
+  });
+
+  test("a lone CHANGES_REQUESTED is a veto", () => {
+    expect(changesRequestedBy([rv("nik", "CHANGES_REQUESTED", "2026-07-27T10:00:00Z")])).toEqual([
+      "nik",
+    ]);
+  });
+
+  // GitHub's own semantics: a reviewer's LATEST position wins, so an objection the same person later
+  // withdrew is spent. Blocking on it forever would wedge every PR that ever had a round of feedback.
+  test("a later APPROVED from the same reviewer clears their earlier objection", () => {
+    expect(
+      changesRequestedBy([
+        rv("nik", "CHANGES_REQUESTED", "2026-07-27T10:00:00Z"),
+        rv("nik", "APPROVED", "2026-07-27T11:00:00Z"),
+      ]),
+    ).toEqual([]);
+  });
+
+  test("one reviewer's approval does not clear another's objection", () => {
+    expect(
+      changesRequestedBy([
+        rv("nik", "APPROVED", "2026-07-27T11:00:00Z"),
+        rv("ada", "CHANGES_REQUESTED", "2026-07-27T10:00:00Z"),
+      ]),
+    ).toEqual(["ada"]);
+  });
+
+  // Only APPROVED and CHANGES_REQUESTED move a reviewer's position. A COMMENTED review is the review
+  // BOT's normal posting shape — counting it would make every bot comment look like a human verdict.
+  test("COMMENTED, PENDING and DISMISSED reviews are not positions", () => {
+    expect(
+      changesRequestedBy([
+        rv("bot", "COMMENTED", "2026-07-27T12:00:00Z"),
+        rv("x", "PENDING", "2026-07-27T12:00:00Z"),
+        rv("y", "DISMISSED", "2026-07-27T12:00:00Z"),
+      ]),
+    ).toEqual([]);
+  });
+
+  test("a COMMENTED review after CHANGES_REQUESTED does not clear the veto", () => {
+    expect(
+      changesRequestedBy([
+        rv("nik", "CHANGES_REQUESTED", "2026-07-27T10:00:00Z"),
+        rv("nik", "COMMENTED", "2026-07-27T13:00:00Z"),
+      ]),
+    ).toEqual(["nik"]);
+  });
+
+  test("array order does not decide the outcome — the timestamp does", () => {
+    expect(
+      changesRequestedBy([
+        rv("nik", "APPROVED", "2026-07-27T11:00:00Z"),
+        rv("nik", "CHANGES_REQUESTED", "2026-07-27T09:00:00Z"),
+      ]),
+    ).toEqual([]);
+  });
+
+  test("malformed entries are skipped rather than throwing", () => {
+    expect(changesRequestedBy([{}, { state: "CHANGES_REQUESTED" }, { user: {} }])).toEqual([]);
   });
 });

@@ -52,7 +52,12 @@ export const buildAgentDoc = (cfg: Config): string =>
     "| `loop:review-runner-<...>` / `loop:review-model-<...>` / `loop:review-effort-<...>` | the same three axes for the rubric grader |",
     "| `loop:model-<model>` | legacy alias for `loop:impl-model-*` |",
     "",
-    "**What the loop will do unattended:** open a PR, fix its own review findings, and squash-merge once CI is green, no blocking (high/critical) review finding remains, and the rubric passes.",
+    "**What the loop will do unattended:** open a PR, fix its own review findings, and squash-merge once CI is green, no blocking (high/critical) review finding remains, and the rubric passes." +
+      (cfg.review.mode === "required"
+        ? ` This repo sets \`review.mode = "required"\`, so a review by \`${cfg.review.bot}\` covering the final commit must also exist — a PR nothing reviews is parked, not merged.`
+        : cfg.review.mode === "optional"
+          ? ` This repo sets \`review.mode = "optional"\`, so a PR with no review still merges on CI plus the rubric; a review by \`${cfg.review.bot}\` is honoured when there is one, and anyone's "Request changes" parks it.`
+          : ' This repo sets `review.mode = "off"`: PR reviews are not read at all, including "Request changes". CI and the rubric are the whole gate.'),
     "",
     "**What it will never do:** merge work matching a `[[human]]` rule in hamsterwheel.toml — e.g. a schema migration path or a security/payments label (parked as " +
       `\`${cfg.board.blockedReasons.needsHuman}\` for a human), cut a release, or act on anything irreversible beyond merge. Issue text is treated as untrusted data — an issue whose text trips the injection tripwire is blocked, never run.`,

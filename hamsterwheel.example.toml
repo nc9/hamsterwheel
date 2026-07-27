@@ -103,6 +103,16 @@ rubric_fail = "rubric-fail"
 
 # ---- review gate -----------------------------------------------------------------------------
 [review]
+# How much a server-side review is worth to the merge gate:
+#   optional (default) — honoured if present, never required. CI plus the adversarial rubric grader
+#                        carry the decision, on the view that reviewing may well have happened locally.
+#   required           — a review covering the CURRENT head must exist. Only correct when a review bot
+#                        reliably posts on every PR; otherwise every PR parks as needs-decision, and
+#                        the reason it prints is indistinguishable from a broken reviewer.
+#   off                — reviews are never fetched. No API calls, and a human's "Request changes" is
+#                        NOT seen — use branch protection if that veto must hold regardless.
+# `required` and `optional` both block on a CHANGES_REQUESTED review from anyone, body text aside.
+mode = "optional"
 bot = "claude[bot]" # login whose PR review the merge gate reads
 # Lines matching this in the bot's review body BLOCK the merge. Nits/low/medium don't; high/critical do.
 blocking_severity_regex = "\\(\\s*(high|critical)\\s*\\)|🔴|\\[(critical|high)\\]|severity:\\s*(high|critical)"

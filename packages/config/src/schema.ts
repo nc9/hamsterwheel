@@ -37,6 +37,25 @@ export type HumanRule = {
   labels?: string[];
 };
 
+/**
+ * How much a server-side PR review is worth to the merge gate.
+ *
+ * - `required` — a review covering the current head must exist. Strictest, and the right choice only
+ *   when a review bot reliably posts on every PR.
+ * - `optional` — a covering review is honoured if present, and its absence is not a blocker. CI plus
+ *   the adversarial rubric grader carry the decision.
+ * - `off`  — reviews are never fetched at all.
+ *
+ * A submitted review in CHANGES_REQUESTED state blocks under `required` AND `optional`: that is a human
+ * explicitly withholding approval, not a finding whose severity the gate gets to weigh. `off` does not
+ * honour it, because `off` issues no review API calls at all — that is the point of the mode, and the
+ * cost of choosing it. Use branch protection if a human veto must hold regardless of loop config.
+ */
+export const REVIEW_MODES = ["required", "optional", "off"] as const;
+export type ReviewMode = (typeof REVIEW_MODES)[number];
+const isReviewMode = (v: string): v is ReviewMode =>
+  (REVIEW_MODES as readonly string[]).includes(v);
+
 export type RoleConfig = {
   runner: RunnerName;
   model?: string;
@@ -62,7 +81,7 @@ export type Config = {
     status: StatusNames;
     blockedReasons: BlockedReasonNames;
   };
-  review: { bot: string; blockingSeverityRe: RegExp };
+  review: { mode: ReviewMode; bot: string; blockingSeverityRe: RegExp };
   /** `[[human]]` rules — any hit parks the PR as Blocked: needs-human instead of auto-merging. */
   humanRules: HumanRule[];
   criteriaHeading: string;
@@ -219,6 +238,15 @@ class Reader {
 const REPO_SLUG_RE = /^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/;
 // Branch prefixes end up in a ref name; keep them to the safe subset git and the WIP-branch regex expect.
 const BRANCH_PREFIX_RE = /^[A-Za-z0-9][A-Za-z0-9._/-]*$/;
+
+const readReviewMode = (r: Reader, path: string, fallback: ReviewMode): ReviewMode => {
+  const raw = r.optStr(path);
+  if (raw === undefined) return fallback;
+  const v = raw.toLowerCase();
+  if (isReviewMode(v)) return v;
+  r.fail(`${path} must be one of ${REVIEW_MODES.join(" | ")} (got "${raw}")`);
+  return fallback;
+};
 
 const readRole = (
   r: Reader,
@@ -381,6 +409,13 @@ export const parseConfig = (raw: unknown, opts: { home?: string } = {}): Config 
       },
     },
     review: {
+      // Default `optional`, deliberately the looser value. `required` reads safer but wedges every
+      // fresh adoption: a repo with no review workflow still gets the `claude[bot]` default here, so
+      // nothing ever matches, every PR parks as needs-decision, and the reason it prints ("no review
+      // of the current head") is indistinguishable from a review bot that is merely broken. The gate
+      // does not rest on CI alone under `optional` — the rubric grader is a fresh adversarial session
+      // that did not write the code, and CHANGES_REQUESTED still blocks in every mode.
+      mode: readReviewMode(r, "review.mode", "optional"),
       bot: r.str("review.bot", "claude[bot]"),
       blockingSeverityRe: r.regex(
         "review.blocking_severity_regex",

@@ -60,7 +60,7 @@ If you build your own gate, take the principle rather than the code: **absence o
 ## 3. Check the criteria heading matches, literally — **SILENT**
 
 ```bash
-hamsterwheel plan   # every skipped issue prints its reason
+hamster plan   # every skipped issue prints its reason
 ```
 
 Both an `## Acceptance Criteria` heading and at least one `- [ ]` checkbox are required. A heading with prose under it is not a rubric. Bulk-filed issues from a template are the usual offender: the checkboxes are there, under a differently-named heading.

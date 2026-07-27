@@ -6,7 +6,7 @@ Extracted from a production loop that ran overnight autonomous implementation wa
 
 ## Workspace
 
-- `apps/cli` — the `hamsterwheel` CLI + loop driver (`init`/`doctor`/`plan`/`once`/`run`/`triage`/`reconcile`/`prune`)
+- `apps/cli` — the `hamster` CLI + loop driver (`init`/`doctor`/`plan`/`once`/`run`/`triage`/`reconcile`/`prune`)
 - `packages/sandbox` — docker sandbox runner: argv builder, env resolution, git-config credential scan, image + entrypoint
 - `packages/gate` — pure, tested policy: merge decision, rubric/CI reconciliation, outcome classification, injection screen, salvage/prune, queue selection, label-driven runner/model/effort routing
 - `packages/runners` — claude/codex/opencode abstraction: pure argv builder, per-runner effort/model allow-lists, output normalization, PATH detection

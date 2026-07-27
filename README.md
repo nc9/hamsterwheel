@@ -35,7 +35,7 @@ bun apps/cli/src/index.ts run --execute   # until the Ready queue is empty
 ```
 hamsterwheel/
   apps/
-    cli/            # the `hamsterwheel` CLI + loop driver (bun)
+    cli/            # the `hamster` CLI + loop driver (bun)
   packages/
     sandbox/        # @hamsterwheel/sandbox — OS-isolated docker session runner
     gate/           # @hamsterwheel/gate — pure, tested merge-gate + selection + routing policy
@@ -78,9 +78,9 @@ Works under **node or bun** — the published artifact is node-targeted ESM with
 
 ```bash
 npm i -g hamsterwheel       # or: bun add -g hamsterwheel
-hamsterwheel doctor
+hamster doctor
 ```
 
-Needs `git`, `gh` (authenticated, with the `project` scope), and at least one agent CLI on PATH. `docker` only for `--sandbox`. `hamsterwheel doctor` tells you which of those are missing.
+Needs `git`, `gh` (authenticated, with the `project` scope), and at least one agent CLI on PATH. `docker` only for `--sandbox`. `hamster doctor` tells you which of those are missing.
 
 The source is written against node APIs on purpose, so the same code runs under both runtimes with no shim. A CI job installs the packed tarball and runs it under node to keep it that way — a stray `Bun.file` would break every npm consumer and would otherwise only surface after a release.

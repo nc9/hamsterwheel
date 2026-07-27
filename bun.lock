@@ -16,7 +16,7 @@
       "name": "hamsterwheel",
       "version": "0.1.1",
       "bin": {
-        "hamsterwheel": "./dist/index.js",
+        "hamster": "./dist/index.js",
       },
     },
     "packages/config": {

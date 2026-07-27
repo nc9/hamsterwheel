@@ -35,7 +35,7 @@ export const HELP = `🐹 hamsterwheel v${pkg.version}
 An autonomous issue loop for coding agents: you sleep, the hamster runs the wheel.
 
 Usage:
-  hamsterwheel <command> [options]
+  hamster <command> [options]
 
 Commands:
   init       verify prerequisites, provision the board + labels, write ${CONFIG_FILENAME}
@@ -64,7 +64,7 @@ const resolveConfig = async (args: ParsedArgs): Promise<Config> => {
   const path = args.configPath ?? (await findConfig(process.cwd()));
   if (!path)
     throw new ConfigError([
-      `no ${CONFIG_FILENAME} found from ${process.cwd()} upward — run \`hamsterwheel init\``,
+      `no ${CONFIG_FILENAME} found from ${process.cwd()} upward — run \`hamster init\``,
     ]);
   return loadConfig(path);
 };
@@ -73,7 +73,7 @@ export const main = async (argv: string[]): Promise<number> => {
   const args = parseArgs(argv);
   if (args.unknown.length) {
     console.error(
-      `unknown or malformed argument(s): ${args.unknown.join(", ")}\nrun \`hamsterwheel --help\`.`,
+      `unknown or malformed argument(s): ${args.unknown.join(", ")}\nrun \`hamster --help\`.`,
     );
     return 1;
   }

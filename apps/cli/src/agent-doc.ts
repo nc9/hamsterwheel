@@ -27,7 +27,7 @@ export const buildAgentDoc = (cfg: Config): string =>
     "Depends on #123        (optional; `Blocked by #123` also works)",
     "```",
     "",
-    `The \`## ${cfg.criteriaHeading}\` heading is matched LITERALLY and is typo-sensitive: \`## Acceptance\` or a reworded heading makes the issue silently drop out of the queue with no error anywhere (run \`hamsterwheel plan\` — it prints a skip reason per excluded issue).`,
+    `The \`## ${cfg.criteriaHeading}\` heading is matched LITERALLY and is typo-sensitive: \`## Acceptance\` or a reworded heading makes the issue silently drop out of the queue with no error anywhere (run \`hamster plan\` — it prints a skip reason per excluded issue).`,
     "",
     `The checklist IS the merge rubric — an adversarial read-only session grades the resulting codebase against every box. No checklist → the loop blocks the issue as \`${cfg.board.blockedReasons.needsCriteria}\`.`,
     "",

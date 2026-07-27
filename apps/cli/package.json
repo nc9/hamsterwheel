@@ -23,7 +23,7 @@
     "directory": "apps/cli"
   },
   "bin": {
-    "hamsterwheel": "./dist/index.js"
+    "hamster": "./dist/index.js"
   },
   "files": [
     "dist",

@@ -65,7 +65,7 @@ export const loadBoardCtx = async (gh: Gh, cfg: Config): Promise<BoardCtx> => {
     undefined;
   if (!project)
     throw new Error(
-      `project ${cfg.project.number ?? `"${cfg.project.title}"`} not found under owner ${owner} — run \`hamsterwheel init\``,
+      `project ${cfg.project.number ?? `"${cfg.project.title}"`} not found under owner ${owner} — run \`hamster init\``,
     );
 
   const fl = await gh.json<FieldList>([

@@ -104,7 +104,7 @@ export const runChecks = async (opts: { cwd: string; gh?: Gh }): Promise<Check[]
     checks.push({
       name: "config",
       status: "warn",
-      detail: `no ${CONFIG_FILENAME} found — run \`hamsterwheel init\``,
+      detail: `no ${CONFIG_FILENAME} found — run \`hamster init\``,
     });
     return checks;
   }
@@ -159,7 +159,7 @@ export const doctor = async (opts: {
   gh?: Gh;
 }): Promise<number> => {
   const checks = await runChecks(opts);
-  opts.log("🐹 hamsterwheel doctor\n");
+  opts.log("🐹 hamster doctor\n");
   printChecks(checks, opts.log);
   const failed = checks.filter((c) => c.status === "fail");
   const warned = checks.filter((c) => c.status === "warn");

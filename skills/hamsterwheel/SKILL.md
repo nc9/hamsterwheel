@@ -14,7 +14,7 @@ You are the PM. The loop is the IC. Your job is the board and the issue contract
 **`plan` before every batch. It mutates nothing.**
 
 ```bash
-hamsterwheel plan
+hamster plan
 ```
 
 It prints the eligible queue in selection order, the resolved runner/model/effort per issue with a source key, and a skip reason for every excluded issue. On its first real repo it caught two bugs that would otherwise have surfaced as mystery 3am failures: a legitimate issue quarantined by an injection false positive, and a label combination resolving to a model id the target vendor has never heard of.
@@ -24,9 +24,9 @@ Silent eligibility failure is the worst failure mode in a system nobody is watch
 ## Adopting it in a repo
 
 ```bash
-hamsterwheel doctor           # prerequisites: git, gh auth + project scope, docker, runner binaries
-hamsterwheel init --dry-run   # every mutation init would make, printed, applied to nothing
-hamsterwheel init             # provision board + labels, write hamsterwheel.toml, splice the contract
+hamster doctor           # prerequisites: git, gh auth + project scope, docker, runner binaries
+hamster init --dry-run   # every mutation init would make, printed, applied to nothing
+hamster init             # provision board + labels, write hamsterwheel.toml, splice the contract
 ```
 
 `init` splices the issue contract into `CLAUDE.md` and `AGENTS.md` between `<!-- hamsterwheel:start -->` markers, and rewrites in place on re-run. Splice it into **both** if your implement and review runners are different vendors: Claude reads CLAUDE.md, Codex reads AGENTS.md, and a contract only one of them can see is a contract only one of them follows.
@@ -86,10 +86,10 @@ Effort vocabularies differ per runner and a foreign value is dropped, not transl
 ## Running a batch
 
 ```bash
-hamsterwheel once --execute --issue 42 --pr-only   # one issue, stop at the PR
-hamsterwheel once --execute                        # one issue, full gate
-hamsterwheel run  --execute                        # until the Ready queue is empty (serial)
-hamsterwheel run  --execute --sandbox              # sessions OS-isolated in docker
+hamster once --execute --issue 42 --pr-only   # one issue, stop at the PR
+hamster once --execute                        # one issue, full gate
+hamster run  --execute                        # until the Ready queue is empty (serial)
+hamster run  --execute --sandbox              # sessions OS-isolated in docker
 ```
 
 `once`/`run` mutate the board **only** with `--execute`. `plan`, `reconcile` and `prune` (without `--delete`) never mutate anything.
@@ -128,4 +128,4 @@ A failure about **this** issue blocks this issue. A precondition that fails iden
 - `reference/adoption-checklist.md` — the pre-first-run checklist, including the silent-failure items
 - `reference/operating-lessons.md` — the paid-for lessons: git safety, review-loop bounds, quota signatures, parallel-wave hazards
 
-Full CLI surface: `hamsterwheel --help`. Config: `hamsterwheel.example.toml`. Architecture: `docs/design.md`.
+Full CLI surface: `hamster --help`. Config: `hamsterwheel.example.toml`. Architecture: `docs/design.md`.

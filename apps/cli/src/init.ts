@@ -78,7 +78,7 @@ const renderConfig = (v: {
   projectTitle: string;
   baseBranch: string;
 }): string =>
-  `# Written by \`hamsterwheel init\`. See hamsterwheel.example.toml for every option.
+  `# Written by \`hamster init\`. See hamsterwheel.example.toml for every option.
 repo = "${v.repo}"
 
 # Paths that mean "this PR changes a schema migration" → never auto-merged. EDIT THIS for your repo.
@@ -271,7 +271,7 @@ const writeAgentDocs = async (opts: InitOptions, cfg: Config): Promise<void> => 
 
 export const init = async (opts: InitOptions): Promise<number> => {
   const gh = opts.gh ?? new Gh();
-  opts.log(`🐹 hamsterwheel init${opts.dryRun ? " (dry run — nothing will be written)" : ""}\n`);
+  opts.log(`🐹 hamster init${opts.dryRun ? " (dry run — nothing will be written)" : ""}\n`);
 
   opts.log("Prerequisites:");
   const checks = await runChecks({ cwd: opts.cwd, gh });
@@ -343,7 +343,7 @@ export const init = async (opts: InitOptions): Promise<number> => {
   opts.log("\nSummary:");
   printChecks(await runChecks({ cwd: opts.cwd, gh }), opts.log);
   opts.log(
-    `\nNext: edit \`migration_path_regex\` in ${CONFIG_FILENAME} for your repo, move an issue to Ready, then run \`hamsterwheel plan\`.`,
+    `\nNext: edit \`migration_path_regex\` in ${CONFIG_FILENAME} for your repo, move an issue to Ready, then run \`hamster plan\`.`,
   );
   return 0;
 };

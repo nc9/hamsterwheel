@@ -1,6 +1,6 @@
 {
   "name": "hamsterwheel",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "An autonomous GitHub-issue loop for coding agents: claim, implement, review, gate, merge.",
   "keywords": [
     "agent",
@@ -27,8 +27,6 @@
   },
   "files": [
     "dist",
-    "src",
-    "!src/**/*.test.ts",
     "README.md",
     "LICENSE"
   ],
@@ -37,12 +35,6 @@
     "typecheck": "tsgo --noEmit",
     "build": "bun ../../scripts/build.ts",
     "prepublishOnly": "bun ../../scripts/build.ts"
-  },
-  "dependencies": {
-    "@hamsterwheel/config": "workspace:*",
-    "@hamsterwheel/gate": "workspace:*",
-    "@hamsterwheel/runners": "workspace:*",
-    "@hamsterwheel/sandbox": "workspace:*"
   },
   "engines": {
     "bun": ">=1.2.0"

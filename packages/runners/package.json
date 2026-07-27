@@ -1,6 +1,6 @@
 {
   "name": "@hamsterwheel/runners",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "claude/codex/opencode abstraction: argv builder, per-runner model/effort allow-lists, output parsing.",
   "homepage": "https://github.com/nc9/hamsterwheel#readme",
   "bugs": {

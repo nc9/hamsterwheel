@@ -1,6 +1,6 @@
 {
   "name": "@hamsterwheel/config",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "hamsterwheel.toml schema, validation and loader.",
   "homepage": "https://github.com/nc9/hamsterwheel#readme",
   "bugs": {
@@ -38,7 +38,7 @@
     "prepublishOnly": "bun ../../scripts/build.ts"
   },
   "dependencies": {
-    "@hamsterwheel/runners": "workspace:*",
+    "@hamsterwheel/runners": "^0.1.1",
     "smol-toml": "^1.7.1"
   },
   "engines": {

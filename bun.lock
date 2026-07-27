@@ -14,39 +14,33 @@
     },
     "apps/cli": {
       "name": "hamsterwheel",
-      "version": "0.1.0",
+      "version": "0.1.1",
       "bin": {
-        "hamsterwheel": "./src/index.ts",
-      },
-      "dependencies": {
-        "@hamsterwheel/config": "workspace:*",
-        "@hamsterwheel/gate": "workspace:*",
-        "@hamsterwheel/runners": "workspace:*",
-        "@hamsterwheel/sandbox": "workspace:*",
+        "hamsterwheel": "./dist/index.js",
       },
     },
     "packages/config": {
       "name": "@hamsterwheel/config",
-      "version": "0.1.0",
+      "version": "0.1.1",
       "dependencies": {
-        "@hamsterwheel/runners": "workspace:*",
+        "@hamsterwheel/runners": "^0.1.1",
         "smol-toml": "^1.7.1",
       },
     },
     "packages/gate": {
       "name": "@hamsterwheel/gate",
-      "version": "0.1.0",
+      "version": "0.1.1",
       "dependencies": {
-        "@hamsterwheel/runners": "workspace:*",
+        "@hamsterwheel/runners": "^0.1.1",
       },
     },
     "packages/runners": {
       "name": "@hamsterwheel/runners",
-      "version": "0.1.0",
+      "version": "0.1.1",
     },
     "packages/sandbox": {
       "name": "@hamsterwheel/sandbox",
-      "version": "0.1.0",
+      "version": "0.1.1",
     },
   },
   "packages": {

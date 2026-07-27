@@ -14,7 +14,7 @@ hamsterwheel is a small set of pieces that let a coding agent grind through a ba
 
 **The loop driver is wired.** 🐹 `init` · `doctor` · `plan` · `once` · `run` · `triage` · `reconcile` · `prune` all do real work.
 
-Everything repo-specific lives in `hamsterwheel.toml` (see `hamsterwheel.example.toml`); nothing about a particular board, review bot, human-review rules (migration paths, sensitive labels) or model policy is hardcoded. Not yet: wave/parallel mode, post-merge deploy+smoke hooks, deny-by-default sandbox egress.
+Everything repo-specific lives in `hamsterwheel.toml` (see `hamsterwheel.example.toml`); nothing about a particular board, review bot, human-review rules (migration paths, sensitive labels) or model policy is hardcoded. That includes how much a server-side PR review counts: `review.mode` is `optional` by default, on the view that CI is the essential gate and the reviewing may well have happened locally — set it to `required` if a review bot's verdict should be load-bearing, or `off` to skip reviews entirely. Not yet: wave/parallel mode, post-merge deploy+smoke hooks, deny-by-default sandbox egress.
 
 ## Quick start
 

@@ -123,23 +123,40 @@ hamster run  --execute --sandbox              # sessions OS-isolated in docker
 
 `once`/`run` mutate the board **only** with `--execute`. `plan`, `reconcile` and `prune` (without `--delete`) never mutate anything.
 
-Start a new repo on `--pr-only`. It runs the identical pipeline and stops at the open PR, so you inspect real output before the merge path ever executes unsupervised. Graduate to the full gate once you've seen the reviewer emit a correctly-tagged blocking finding at least once — until then the blocking-review path is untested in that repo, and an untested gate arm reads as approval.
+Start a new repo on `--pr-only`. It runs the identical pipeline and stops at the open PR, so you inspect real output before the merge path ever executes unsupervised. Graduate to the full gate once you've seen the reviewer emit a correctly-tagged blocking finding at least once — until then the blocking-review path is untested in that repo, and an untested gate arm reads as approval. If the repo has no review bot at all, that graduation never comes: run `review.mode = "optional"` and lean on CI plus the rubric, rather than leaving `required` set against a reviewer that will never speak.
 
 ## The merge gate
 
-The merge decision is a pure function over four booleans, evaluated in a fixed order:
+The merge decision is a pure function over its signals, evaluated in a fixed order:
 
 ```
-CI → human-review rules → blocking review findings → rubric
+CI → human-review rules → changes-requested → review provenance* → blocking review findings → rubric
+                                              *only when review.mode = "required"
 ```
 
 No model is ever asked "should this merge?" Models grade the rubric, which is a judgement call over English. Reconciling that grade with CI, human-review rules and review findings is deterministic tested code.
 
-Never auto-merged regardless of how green things look: anything matching a `[[human]]` rule in `hamsterwheel.toml` (parked as `needs-human`, with the fired rule names in the reason), and anything carrying a high or critical review finding. Nits don't block.
+Never auto-merged regardless of how green things look: anything matching a `[[human]]` rule in `hamsterwheel.toml` (parked as `needs-human`, with the fired rule names in the reason), anything carrying a high or critical review finding, and anything a reviewer has requested changes on. Nits don't block.
+
+### `review.mode` — how much a server-side review is worth
+
+CI is the essential gate; a PR-comment review is defence in depth. The reviewing may well have happened locally, and plenty of repos have no review bot at all.
+
+| mode                 | behaviour                                                                            |
+| -------------------- | ------------------------------------------------------------------------------------ |
+| `optional` (default) | a review covering the head is honoured if present; its absence is not a blocker      |
+| `required`           | a review covering the head **must** exist, else `needs-decision`                     |
+| `off`                | reviews are never fetched — no API calls, no review signal of any kind               |
+
+`optional` is the default deliberately. `required` reads safer and is what wedges a fresh adoption: a repo with no review workflow still gets the `claude[bot]` default for `review.bot`, so nothing ever matches, every PR parks, and the printed reason ("no review of the current head") is indistinguishable from a review bot that is merely broken. Under `optional` the gate is still CI plus the adversarial rubric grader, which never wrote the code. `hamster doctor` fails the `review gate` check when `mode = required` and the configured reviewer has never posted on the repo — that turns the wedge into a diagnosis.
+
+A `CHANGES_REQUESTED` review from **any** login blocks under both `required` and `optional`, body text aside: a human will not write `(high)` unprompted, so their objection would otherwise parse as clean prose. It is not aged out against the head — GitHub holds that state until the reviewer re-reviews, which is exactly what it means. Latest position per reviewer wins, so a later `APPROVED` from the same person clears it. **`off` cannot see it**, since it makes no review calls at all; that is the cost of the mode, and branch protection is the backstop if a human veto must hold regardless of loop config.
 
 A `[[human]]` rule has a `name` and fires on changed **paths** (case-insensitive regex against the PR's files) and/or issue **labels** (case-insensitive exact match) — either hit parks the PR. At least one path-based rule is required, so a schema migration can never auto-merge by omission; the canonical config is a `prod-migration` rule on `(^|/)(migrations|drizzle)/`, with optional extras like a `labels = ["security", "auth", "payments"]` rule. Label-triggered rules are known at selection time, so `plan` prints "will park for human (<rule>)" against the affected issues before anything runs.
 
 **`blockingReview` is the arm most likely to be silently broken in your repo.** It greps your review bot's comment for severity markers. If your review workflow asks for freeform prose, no finding ever carries a marker, `blockingReview` is always 0, and the gate reads every review — including one flagging real problems — as approval. Verify it empirically before trusting it; `reference/adoption-checklist.md` has the exact test.
+
+That verification matters just as much under `optional` as under `required`, and it is easy to assume otherwise. `optional` relaxes whether a review must *exist*; it does not relax what a review that does exist is allowed to say. A reviewer emitting untagged prose is equally invisible in both modes.
 
 ## When something goes wrong
 

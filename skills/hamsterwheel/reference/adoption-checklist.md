@@ -16,6 +16,8 @@ Observed: a first run claimed an issue, built the worktree, and died on `scripts
 
 ## 2. Prove the blocking-review arm actually fires — **SILENT, and it defeats the gate**
 
+Skip this only if you run `review.mode = "off"`. It applies equally under `required` and the default `optional`: the mode decides whether a review must *exist*, never what an existing review is allowed to say.
+
 The gate greps your review bot's comment for severity markers (`(high)`, `(critical)`, `🔴`, `severity: high`). Most review workflows ask for freeform prose and never emit them. Then `blockingReview` is always 0, and a review full of real problems reads as approval.
 
 Test it against a real comment, not a hypothetical one:
@@ -50,12 +52,16 @@ Attempt 1 failed: ... Error is not retryable, giving up immediately
 
 So a PR editing CI gets a green check, no review comment, and no findings. Under a naive gate that reads as CI green + review clean → merge.
 
-hamsterwheel closes this with `reviewObserved`: the gate requires a review comment whose timestamp postdates the head commit, and blocks as `needs-decision` when there isn't one. Two failures collapse into it, and both would otherwise read as approval:
+hamsterwheel closes this with `reviewObserved`, **under `review.mode = "required"`**: the gate requires a review comment whose timestamp postdates the head commit, and blocks as `needs-decision` when there isn't one. Two failures collapse into it, and both would otherwise read as approval:
 
 - **no review at all** (skipped, errored, workflow disabled, wrong `review.bot` login)
 - **a stale review** — the gate reads the _last_ bot comment regardless of age, so after a fix push, a review of the previous commit would otherwise stand in for a review of the code being merged
 
-If you build your own gate, take the principle rather than the code: **absence of a signal is not approval.** Require positive evidence that the check you depend on actually ran against the artifact you are about to ship.
+Under the default `optional`, that check does not run — by design, because demanding a review from a repo that has no reviewer parks every PR forever. What carries the decision instead is CI plus the rubric grader, a fresh adversarial session that did not write the code. **So this item is a real decision, not a formality**: if your repo does have a review bot and you want its verdict to be load-bearing, set `review.mode = "required"` and then verify item 2 — otherwise a broken reviewer costs you nothing visible, which is precisely the failure this section is about.
+
+If you build your own gate, take the principle rather than the code: **absence of a signal is not approval.** Either require positive evidence that the check you depend on ran against the artifact you are about to ship, or decide deliberately that the check is not load-bearing. What you must not do is treat its silence as a pass.
+
+Independent of mode, a `CHANGES_REQUESTED` review from any login blocks. That is the one review signal a human reliably produces without being told about severity tags, and hamsterwheel reads the review *state* rather than its prose. `off` does not read it, since it makes no review calls at all.
 
 ## 3. Check the criteria heading matches, literally — **SILENT**
 

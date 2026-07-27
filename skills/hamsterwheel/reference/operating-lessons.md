@@ -34,6 +34,8 @@ The most dangerous shape a gate can take is one where "everything is fine" and "
 
 The fix is `reviewObserved`: require a review comment whose timestamp postdates the head commit, and block when there isn't one. That also catches the stale case, since a gate reading the _last_ bot comment will otherwise let a review of the previous commit stand in for a review of the code being merged.
 
+The follow-on lesson, learned by shipping the first fix and watching it wedge a repo: **the cure for an ambiguous signal is to disambiguate it, not to make it mandatory.** Requiring a review made "nothing ran" loud, but it also made a repo with no reviewer unable to merge anything, with a failure message that reads exactly like a broken reviewer. `review.mode` separates the two questions — is this signal load-bearing here, and did it actually fire — so a repo can honestly answer "we don't gate on that" without the gate pretending it does. What stayed unconditional is the part a human produces without being coached: a `CHANGES_REQUESTED` state blocks whether or not reviews are required, because it is a position, not an absence.
+
 Generalise it. For any check a gate depends on, ask what value it takes when the check never ran, and whether that value is distinguishable from success. If it isn't, the gate has a hole shaped exactly like your most important PR.
 
 ## Failure scope

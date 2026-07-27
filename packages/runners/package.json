@@ -1,11 +1,35 @@
 {
   "name": "@hamsterwheel/runners",
-  "version": "0.0.1",
+  "version": "0.1.0",
+  "description": "claude/codex/opencode abstraction: argv builder, per-runner model/effort allow-lists, output parsing.",
+  "homepage": "https://github.com/nc9/hamsterwheel#readme",
+  "bugs": {
+    "url": "https://github.com/nc9/hamsterwheel/issues"
+  },
+  "license": "MIT",
+  "author": "Nik Cubrilovic",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/nc9/hamsterwheel.git",
+    "directory": "packages/runners"
+  },
+  "files": [
+    "src",
+    "!src/**/*.test.ts",
+    "README.md",
+    "LICENSE"
+  ],
   "type": "module",
   "exports": {
     ".": "./src/index.ts"
   },
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "typecheck": "tsgo --noEmit"
+  },
+  "engines": {
+    "bun": ">=1.2.0"
   }
 }

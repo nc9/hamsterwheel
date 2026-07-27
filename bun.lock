@@ -14,7 +14,7 @@
     },
     "apps/cli": {
       "name": "hamsterwheel",
-      "version": "0.0.1",
+      "version": "0.1.0",
       "bin": {
         "hamsterwheel": "./src/index.ts",
       },
@@ -27,25 +27,25 @@
     },
     "packages/config": {
       "name": "@hamsterwheel/config",
-      "version": "0.0.1",
+      "version": "0.1.0",
       "dependencies": {
         "@hamsterwheel/runners": "workspace:*",
       },
     },
     "packages/gate": {
       "name": "@hamsterwheel/gate",
-      "version": "0.0.1",
+      "version": "0.1.0",
       "dependencies": {
         "@hamsterwheel/runners": "workspace:*",
       },
     },
     "packages/runners": {
       "name": "@hamsterwheel/runners",
-      "version": "0.0.1",
+      "version": "0.1.0",
     },
     "packages/sandbox": {
       "name": "@hamsterwheel/sandbox",
-      "version": "0.0.1",
+      "version": "0.1.0",
     },
   },
   "packages": {

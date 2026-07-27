@@ -71,3 +71,12 @@ bun apps/cli/src/index.ts --help
 ## License
 
 MIT © 2026 Nik Cubrilovic
+
+## Install
+
+Requires [bun](https://bun.sh) — the CLI and packages ship as bun-native TypeScript with no build step, and the `hamsterwheel` bin runs under `#!/usr/bin/env bun`.
+
+```bash
+bun add -g hamsterwheel     # or: bunx hamsterwheel <command>
+hamsterwheel doctor
+```

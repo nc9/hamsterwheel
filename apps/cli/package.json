@@ -1,9 +1,36 @@
 {
   "name": "hamsterwheel",
-  "version": "0.0.1",
+  "version": "0.1.0",
+  "description": "An autonomous GitHub-issue loop for coding agents: claim, implement, review, gate, merge.",
+  "keywords": [
+    "agent",
+    "automation",
+    "ci",
+    "claude",
+    "codex",
+    "github",
+    "loop"
+  ],
+  "homepage": "https://github.com/nc9/hamsterwheel#readme",
+  "bugs": {
+    "url": "https://github.com/nc9/hamsterwheel/issues"
+  },
+  "license": "MIT",
+  "author": "Nik Cubrilovic",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/nc9/hamsterwheel.git",
+    "directory": "apps/cli"
+  },
   "bin": {
     "hamsterwheel": "./src/index.ts"
   },
+  "files": [
+    "src",
+    "!src/**/*.test.ts",
+    "README.md",
+    "LICENSE"
+  ],
   "type": "module",
   "scripts": {
     "typecheck": "tsgo --noEmit"
@@ -13,5 +40,8 @@
     "@hamsterwheel/gate": "workspace:*",
     "@hamsterwheel/runners": "workspace:*",
     "@hamsterwheel/sandbox": "workspace:*"
+  },
+  "engines": {
+    "bun": ">=1.2.0"
   }
 }

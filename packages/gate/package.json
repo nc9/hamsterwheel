@@ -1,14 +1,38 @@
 {
   "name": "@hamsterwheel/gate",
-  "version": "0.0.1",
+  "version": "0.1.0",
+  "description": "Pure, tested merge-gate policy: merge decision, rubric reconciliation, injection screen, queue selection.",
+  "homepage": "https://github.com/nc9/hamsterwheel#readme",
+  "bugs": {
+    "url": "https://github.com/nc9/hamsterwheel/issues"
+  },
+  "license": "MIT",
+  "author": "Nik Cubrilovic",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/nc9/hamsterwheel.git",
+    "directory": "packages/gate"
+  },
+  "files": [
+    "src",
+    "!src/**/*.test.ts",
+    "README.md",
+    "LICENSE"
+  ],
   "type": "module",
   "exports": {
     ".": "./src/index.ts"
+  },
+  "publishConfig": {
+    "access": "public"
   },
   "scripts": {
     "typecheck": "tsgo --noEmit"
   },
   "dependencies": {
     "@hamsterwheel/runners": "workspace:*"
+  },
+  "engines": {
+    "bun": ">=1.2.0"
   }
 }

@@ -31,6 +31,7 @@ import { commandHelp, globalHelp } from "./help.ts";
 import { init } from "./init.ts";
 import { preflight } from "./preflight.ts";
 import { runPrune } from "./prune.ts";
+import { release, renderRelease } from "./release.ts";
 import { type RunLog, createRunLog, makeRunId } from "./runlog.ts";
 
 export const HELP = globalHelp(pkg.version);
@@ -102,6 +103,16 @@ export const main = async (argv: string[]): Promise<number> => {
       1,
       "⚠ `run` requires --execute to loop — use `once` for a single dry pass, or `plan` to inspect.",
     );
+  // A release --execute with nothing to execute must fail before any GitHub call, not mid-cut.
+  if (args.command === "release" && args.execute && !args.tag && !args.archiveDone)
+    return fail(
+      1,
+      "⚠ `release --execute` needs --tag <v> (cut a release) or --archive-done (backfill archive).",
+    );
+  // The backfill arm has no tag and no notes — combining it with release-arm flags would silently
+  // ignore them, and a silently-ignored flag is the exact failure mode validateArgs exists to prevent.
+  if (args.command === "release" && args.archiveDone && (args.tag || args.changelog))
+    return fail(1, "⚠ --archive-done is the backfill arm: it takes no --tag and no --changelog.");
   // --json cannot answer a y/N prompt; require the intent up front instead of dying mid-provision.
   if (args.command === "init" && args.json && !args.yes && !args.dryRun)
     return fail(1, "init --json is non-interactive — pass --yes to apply or --dry-run to preview.");
@@ -152,7 +163,10 @@ export const main = async (argv: string[]): Promise<number> => {
     }
 
     const ctx = await loadBoardCtx(gh, cfg);
-    const readOnly = args.command === "plan" || args.command === "reconcile";
+    const readOnly =
+      args.command === "plan" ||
+      args.command === "reconcile" ||
+      (args.command === "release" && !args.execute);
     // Tee the run log so --json can replay the exact structured events the .jsonl file records.
     const events: Record<string, unknown>[] = [];
     const base = createRunLog({
@@ -194,6 +208,20 @@ export const main = async (argv: string[]): Promise<number> => {
         if (args.json) emit({ ...report });
         else renderReconcile(report, cfg, log);
         return 0;
+      }
+      case "release": {
+        const report = await release(deps, {
+          execute: args.execute,
+          tag: args.tag,
+          changelog: args.changelog,
+          archiveDone: args.archiveDone,
+          date: new Date().toISOString().slice(0, 10),
+        });
+        renderRelease(report, log);
+        const failed =
+          report.archive.archived.some((a) => !a.ok) || report.changelog?.action === "failed";
+        if (args.json) emit({ ...report, ok: !failed } as Record<string, unknown>);
+        return failed ? 1 : 0;
       }
       case "triage": {
         const report = await triage(deps, args.sync);

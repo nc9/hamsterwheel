@@ -8,6 +8,47 @@ export const fetchBase = async (baseBranch: string): Promise<void> => {
   await git(["fetch", "origin", baseBranch]);
 };
 
+/** Refresh the base AND all tags — release derivation reads both from the remote's view. */
+export const fetchTags = async (baseBranch: string): Promise<void> => {
+  await git(["fetch", "origin", baseBranch, "--tags"]);
+};
+
+/** Sha of a ref, or null when it doesn't resolve. */
+export const revParse = async (ref: string): Promise<string | null> => {
+  const r = await git(["rev-parse", "--verify", `${ref}^{commit}`]);
+  const out = r.stdout.toString().trim();
+  return r.exitCode === 0 && out ? out : null;
+};
+
+/** Tags already reachable from `ref` (release derivation only considers shipped tags). */
+export const tagsMergedInto = async (ref: string): Promise<string[]> => {
+  const r = await git(["tag", "--merged", ref]);
+  return r.stdout
+    .toString()
+    .split("\n")
+    .map((l) => l.trim())
+    .filter(Boolean);
+};
+
+export const tagExists = async (tag: string): Promise<boolean> =>
+  (await git(["rev-parse", "-q", "--verify", `refs/tags/${tag}`])).exitCode === 0;
+
+/** Commit subjects in `from..to` (all history up to `to` when from is null), newest first. */
+export const commitSubjectsBetween = async (
+  from: string | null,
+  to: string,
+): Promise<string[]> => {
+  const range = from ? `${from}..${to}` : to;
+  const r = await git(["log", "--format=%s", range]);
+  if (r.exitCode !== 0)
+    throw new Error(`git log ${range} failed: ${r.stderr.toString().trim().slice(0, 300)}`);
+  return r.stdout
+    .toString()
+    .split("\n")
+    .map((l) => l.trim())
+    .filter(Boolean);
+};
+
 /** Dir-less worktree registrations block `worktree add -B` with "already checked out". */
 export const pruneWorktrees = async (): Promise<void> => {
   await git(["worktree", "prune"]);

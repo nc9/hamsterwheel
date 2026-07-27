@@ -6,7 +6,16 @@ import {
   resolveSessionPolicy,
 } from "@hamsterwheel/gate";
 
-import { addItem, comment, fetchItemState, listItems, setBlocked, setStatus } from "./board.ts";
+import {
+  type BoardItem,
+  addItem,
+  comment,
+  fetchItemState,
+  listItems,
+  setBlocked,
+  setStatus,
+} from "./board.ts";
+import type { Gh } from "./gh.ts";
 import { buildQueue, enrichItem, isEpic, type LoopIssue, type QueueSkip } from "./issues.ts";
 import { type LoopDeps, claimAndRun } from "./pipeline.ts";
 
@@ -27,6 +36,37 @@ const fmt = (ns: number[]) => (ns.length ? ns.map((n) => `#${n}`).join(" ") : "n
 const policyOf = (cfg: Config, iss: LoopIssue) =>
   resolveSessionPolicy(iss, { implement: cfg.runners.implement, review: cfg.runners.review });
 
+/** Open issues across the source repos that are not on the board. Deliberate design: the board being
+ * opt-in is the trust gate (nothing runs un-curated), so drift must be VISIBLE, not auto-fixed. */
+export const listOffBoardIssues = async (
+  gh: Gh,
+  cfg: Config,
+  items: BoardItem[],
+): Promise<{ repo: string; number: number; url: string }[]> => {
+  const onBoard = new Set(
+    items
+      .filter((i) => i.content?.number)
+      .map((i) => `${i.content!.repository}#${i.content!.number}`),
+  );
+  const missing: { repo: string; number: number; url: string }[] = [];
+  for (const repo of cfg.sourceRepos) {
+    const open = await gh.json<{ number: number; url: string }[]>([
+      "issue",
+      "list",
+      "-R",
+      repo,
+      "--state",
+      "open",
+      "--limit",
+      "500",
+      "--json",
+      "number,url",
+    ]);
+    for (const o of open) if (!onBoard.has(`${repo}#${o.number}`)) missing.push({ repo, ...o });
+  }
+  return missing;
+};
+
 export type PlanReport = {
   eligible: {
     number: number;
@@ -42,13 +82,18 @@ export type PlanReport = {
   skipped: QueueSkip[];
   /** Issue number the loop would pick next, or null when the queue is empty. */
   pick: number | null;
+  /** Open issues across the source repos that aren't on the board — visible drift, never auto-fixed. */
+  offBoard: number;
 };
 
 /** READ-ONLY: the queue, the skip reasons, and the resolved runner/model/effort per issue. No mutations. */
 export const plan = async (deps: CommandDeps): Promise<PlanReport> => {
   const { gh, cfg, ctx } = deps;
-  const { eligible, skipped } = await buildQueue(gh, cfg, await listItems(gh, ctx));
+  const items = await listItems(gh, ctx);
+  const { eligible, skipped } = await buildQueue(gh, cfg, items);
+  const offBoard = (await listOffBoardIssues(gh, cfg, items)).length;
   return {
+    offBoard,
     eligible: eligible.map((i) => {
       const p = policyOf(cfg, i);
       return {
@@ -80,6 +125,10 @@ export const renderPlan = (r: PlanReport, log: (m: string) => void): void => {
     log(`\nSkipped:`);
     for (const s of r.skipped) log(`  #${s.num}: ${s.why}`);
   }
+  if (r.offBoard)
+    log(
+      `\n· ${r.offBoard} open issue${r.offBoard === 1 ? " is" : "s are"} not on the board — \`hamster triage --sync\` folds them in as Draft`,
+    );
   log(r.pick !== null ? `\n→ would pick #${r.pick}` : `\n→ queue empty, idle`);
   log(
     `\n  (source key: r=runner m=model e=effort · l=label c=config h=heuristic r=runner-default)`,
@@ -155,28 +204,7 @@ export type TriageReport = {
 export const triage = async (deps: CommandDeps, sync: boolean): Promise<TriageReport> => {
   const { gh, cfg, ctx, log } = deps;
   const items = await listItems(gh, ctx);
-  const onBoard = new Set(
-    items
-      .filter((i) => i.content?.number)
-      .map((i) => `${i.content!.repository}#${i.content!.number}`),
-  );
-
-  const missing: { repo: string; number: number; url: string }[] = [];
-  for (const repo of cfg.sourceRepos) {
-    const open = await gh.json<{ number: number; url: string }[]>([
-      "issue",
-      "list",
-      "-R",
-      repo,
-      "--state",
-      "open",
-      "--limit",
-      "500",
-      "--json",
-      "number,url",
-    ]);
-    for (const o of open) if (!onBoard.has(`${repo}#${o.number}`)) missing.push({ repo, ...o });
-  }
+  const missing = await listOffBoardIssues(gh, cfg, items);
   if (sync)
     for (const m of missing) {
       const id = await addItem(gh, ctx, m.url);

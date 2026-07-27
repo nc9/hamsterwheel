@@ -6,7 +6,7 @@ Extracted from a production loop that ran overnight autonomous implementation wa
 
 ## Workspace
 
-- `apps/cli` — the `hamster` CLI + loop driver (`init`/`doctor`/`plan`/`once`/`run`/`triage`/`reconcile`/`prune`)
+- `apps/cli` — the `hamster` CLI + loop driver (`init`/`doctor`/`plan`/`once`/`run`/`triage`/`reconcile`/`prune`/`release`)
 - `packages/sandbox` — docker sandbox runner: argv builder, env resolution, git-config credential scan, image + entrypoint
 - `packages/gate` — pure, tested policy: merge decision, rubric/CI reconciliation, outcome classification, injection screen, salvage/prune, queue selection, label-driven runner/model/effort routing
 - `packages/runners` — claude/codex/opencode abstraction: pure argv builder, per-runner effort/model allow-lists, output normalization, PATH detection
@@ -94,3 +94,54 @@ Target driver architecture: `docs/design.md`.
 3. Sandbox follow-ups: deny-by-default egress proxy, per-run GitHub App token minting, hermetic in-container clone.
 4. Review loop: iterate on review findings before the rubric gate (currently a blocking finding parks the PR for a human).
 5. npm publish decision (`hamsterwheel` is free on npm; `@hamsterwheel/*` scope needs the org).
+
+<!-- hamsterwheel:start -->
+
+## hamsterwheel issue contract
+
+The autonomous loop works issues on the GitHub Projects v2 board for `nc9/hamsterwheel`. It is the IC; you are the PM.
+
+**An issue is only eligible when its body contains:**
+
+```markdown
+## Acceptance Criteria
+
+- [ ] observable, checkable behavior
+- [ ] one checkbox per requirement
+
+Depends on #123 (optional; `Blocked by #123` also works)
+```
+
+The `## Acceptance Criteria` heading is matched LITERALLY and is typo-sensitive: `## Acceptance` or a reworded heading makes the issue silently drop out of the queue with no error anywhere (run `hamster plan` — it prints a skip reason per excluded issue).
+
+The checklist IS the merge rubric — an adversarial read-only session grades the resulting codebase against every box. No checklist → the loop blocks the issue as `needs-criteria`.
+
+**Board statuses** (the whole interface):
+
+- `Draft` — human scratch state; the loop ignores it.
+- `Ready` — criteria + priority (`P0`–`P3`) + size (`size: XS`–`size: XL`) + no open deps. Eligible.
+- `In Progress` — claimed; the `Owner` field holds the run id.
+- `In Review` — PR open and linked.
+- `Blocked` — a human is needed; the blocked reason says why.
+- `Done` — merged, not yet released. `hamster release` archives Done items when their version ships (derived notes: commits since the last tag → PRs → closed issues), so the board stays a queue.
+
+**Selection order:** priority (P0→P3) → size (smallest first) → age (oldest first).
+
+**Label vocabulary** (all optional; an invalid value silently falls back to the default policy):
+
+| label                                                                               | effect                                     |
+| ----------------------------------------------------------------------------------- | ------------------------------------------ |
+| `loop:impl-runner-<claude\|codex\|opencode>`                                        | which agent CLI implements it              |
+| `loop:impl-model-<model>`                                                           | model for the implement session            |
+| `loop:impl-effort-<level>`                                                          | reasoning effort for the implement session |
+| `loop:review-runner-<...>` / `loop:review-model-<...>` / `loop:review-effort-<...>` | the same three axes for the rubric grader  |
+| `loop:model-<model>`                                                                | legacy alias for `loop:impl-model-*`       |
+
+**What the loop will do unattended:** open a PR, fix its own review findings, and squash-merge once CI is green, no blocking (high/critical) review finding remains, and the rubric passes.
+
+**What it will never do:** merge work matching a `[[human]]` rule in hamsterwheel.toml — e.g. a schema migration path or a security/payments label (parked as `needs-human` for a human), cut a release, or act on anything irreversible beyond merge. Issue text is treated as untrusted data — an issue whose text trips the injection tripwire is blocked, never run.
+
+**CI note for repos where a merge triggers a deploy:** the deploy job must NOT share a `cancel-in-progress` concurrency group with CI. Back-to-back merges each cancel the previous run, so intermediate merges' deploys never execute — six merges once left five services running stale code. `cancel-in-progress` is right for tests and catastrophic for anything with side effects.
+
+Write issues for a competent stranger: state the observable outcome, not the implementation.
+<!-- hamsterwheel:end -->

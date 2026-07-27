@@ -121,7 +121,20 @@ hamster run  --execute                        # until the Ready queue is empty (
 hamster run  --execute --sandbox              # sessions OS-isolated in docker
 ```
 
-`once`/`run` mutate the board **only** with `--execute`. `plan`, `reconcile` and `prune` (without `--delete`) never mutate anything.
+`once`/`run` mutate the board **only** with `--execute`. `plan`, `reconcile`, `prune` (without `--delete`) and `release` (without `--execute`) never mutate GitHub or the board — `release`'s preview does run a `git fetch` so the notes derive from fresh refs.
+
+### Cutting a version: `hamster release`
+
+Releases are never cut unattended — this command IS the human cutting one, with hamster doing the bookkeeping. The issue→version mapping is **derived, never stored**: commits since the last semver tag → PRs (squash-title suffix) → the issues those PRs closed. No board field to maintain, nothing to drift.
+
+```bash
+hamster release                          # preview: notes, suggested semver bump, archive plan
+hamster release --tag v0.5.0 --execute   # tag + GitHub Release (pinned to the remote base tip) + archive
+hamster release --tag v0.5.0 --execute --changelog   # …and prepend CHANGELOG.md (commit left to you)
+hamster release --archive-done --execute # backfill: archive every Done item whose issue is closed
+```
+
+Cutting a release **archives** the shipped Done items (Projects v2 archive — hidden from views and queries, restorable, the issue itself untouched), which is what gives `Done` its meaning: **merged but not yet released**. The board stays a queue; the history lives in the release notes and git. An item is archived only when its issue is affirmatively closed — a failed lookup keeps it, and keeps are reported separately from failures. `--archive-done` is the one-shot cleanup for a board that predates this command. `plan` also reports how many open issues are not on the board at all (`triage --sync` folds them in as Draft).
 
 Start a new repo on `--pr-only`. It runs the identical pipeline and stops at the open PR, so you inspect real output before the merge path ever executes unsupervised. Graduate to the full gate once you've seen the reviewer emit a correctly-tagged blocking finding at least once — until then the blocking-review path is untested in that repo, and an untested gate arm reads as approval. If the repo has no review bot at all, that graduation never comes: run `review.mode = "optional"` and lean on CI plus the rubric, rather than leaving `required` set against a reviewer that will never speak.
 

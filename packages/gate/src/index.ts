@@ -62,6 +62,19 @@ export {
   formatSessionPlan,
 } from "./policy.ts";
 export {
+  type CommitEntry,
+  type BumpSuggestion,
+  type NotesLine,
+  type Section,
+  type NotesInput,
+  parseCommitSubject,
+  latestSemverTag,
+  suggestBump,
+  groupSections,
+  renderNotes,
+  prependChangelog,
+} from "./release.ts";
+export {
   type WipBranchInfo,
   type PruneAction,
   type PruneDecision,

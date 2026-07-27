@@ -150,6 +150,34 @@ export const COMMAND_DOCS: Record<Command, CommandDoc> = {
       ["1", "config unreachable or a deletion failed"],
     ],
   },
+  release: {
+    summary: "cut a version: derived notes, tag + GitHub Release, archive the shipped Done items",
+    usage:
+      "hamster release [--tag <v>] [--execute] [--changelog] [--archive-done] [--config <path>] [--json]",
+    description: [
+      "The one deliberately human-invoked mutation. The issue→version mapping is DERIVED, never stored:",
+      "commits since the last semver tag → PRs (squash-title suffix) → the issues those PRs closed.",
+      "Default is a preview: notes, suggested semver bump (when --tag is omitted), and the archive plan.",
+      "--execute (requires --tag or --archive-done) creates the tag + GitHub Release pinned to the",
+      "remote base tip, then archives exactly the shipped Done items — Done means \"merged, not yet",
+      "released\". An item is archived only when its issue is affirmatively closed; a failed lookup",
+      "keeps it. Archived items are restorable from the project's archive.",
+      "--archive-done is the backfill arm: archive EVERY Done item whose issue is closed, no tag/notes.",
+    ],
+    json: `{ ok, command: "release", dryRun, tag, previousTag, suggested?: {level, next},
+  prs: [{number, type, title, issues}], notes, archive: {planned: [{issue, itemId}],
+  archived: [{issue, ok, error?}], kept: [{issue, reason}]}, release?: {url},
+  changelog?: {path, action} }`,
+    exitCodes: [
+      ["0", "preview printed / release cut and archive done"],
+      ["1", "usage (--execute without --tag/--archive-done), tag exists, or a mutation failed"],
+    ],
+    examples: [
+      "hamster release",
+      "hamster release --tag v0.5.0 --execute --changelog",
+      "hamster release --archive-done --execute",
+    ],
+  },
 };
 
 const flagLines = (cmd: Command): string[] =>

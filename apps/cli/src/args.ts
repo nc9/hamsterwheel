@@ -14,6 +14,7 @@ export const COMMANDS = [
   "triage",
   "reconcile",
   "prune",
+  "release",
 ] as const;
 export type Command = (typeof COMMANDS)[number];
 
@@ -34,7 +35,23 @@ export const FLAG_SPECS: readonly FlagSpec[] = [
   {
     flag: "--execute",
     desc: "do real work — without it the command is a read-only / print-only pass",
-    commands: ["once", "run", "triage"],
+    commands: ["once", "run", "triage", "release"],
+  },
+  {
+    flag: "--tag",
+    arg: "<v>",
+    desc: "version tag to cut, e.g. v0.5.0 (omit to preview with a suggested bump)",
+    commands: ["release"],
+  },
+  {
+    flag: "--changelog",
+    desc: "also prepend the notes to CHANGELOG.md (the commit is left to you)",
+    commands: ["release"],
+  },
+  {
+    flag: "--archive-done",
+    desc: "backfill: archive every Done item whose issue is closed — no tag, no notes",
+    commands: ["release"],
   },
   {
     flag: "--issue",
@@ -88,7 +105,7 @@ export const FLAG_SPECS: readonly FlagSpec[] = [
     flag: "--config",
     arg: "<path>",
     desc: "use a specific hamsterwheel.toml instead of searching upward from cwd",
-    commands: ["plan", "once", "run", "triage", "reconcile", "prune"],
+    commands: ["plan", "once", "run", "triage", "reconcile", "prune", "release"],
   },
   {
     flag: "--json",
@@ -118,6 +135,12 @@ export type ParsedArgs = {
   sync: boolean;
   /** prune: actually delete (default is a dry-run plan). */
   delete: boolean;
+  /** release: also prepend the notes to CHANGELOG.md. */
+  changelog: boolean;
+  /** release: backfill — archive every Done item whose issue is closed. */
+  archiveDone: boolean;
+  /** release: the tag to cut (e.g. v0.5.0). */
+  tag?: string;
   yes: boolean;
   dryRun: boolean;
   /** once/run: target a specific Ready+eligible issue instead of the head of the queue. */
@@ -143,6 +166,8 @@ export const parseArgs = (argv: string[]): ParsedArgs => {
     bypass: false,
     sync: false,
     delete: false,
+    changelog: false,
+    archiveDone: false,
     yes: false,
     dryRun: false,
     seen: [],
@@ -190,6 +215,14 @@ export const parseArgs = (argv: string[]): ParsedArgs => {
         out.delete = true;
         see("--delete");
         break;
+      case "--changelog":
+        out.changelog = true;
+        see("--changelog");
+        break;
+      case "--archive-done":
+        out.archiveDone = true;
+        see("--archive-done");
+        break;
       case "--yes":
       case "-y":
         out.yes = true;
@@ -216,6 +249,13 @@ export const parseArgs = (argv: string[]): ParsedArgs => {
         const v = args[i + 1];
         if (v !== undefined && !v.startsWith("-")) out.configPath = args[++i];
         else out.unknown.push(`--config expects a path (got ${JSON.stringify(v)})`);
+        break;
+      }
+      case "--tag": {
+        see("--tag");
+        const v = args[i + 1];
+        if (v !== undefined && !v.startsWith("-")) out.tag = args[++i];
+        else out.unknown.push(`--tag expects a version tag (got ${JSON.stringify(v)})`);
         break;
       }
       case "--project-title": {

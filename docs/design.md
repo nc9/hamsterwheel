@@ -25,7 +25,7 @@ Status semantics (the whole human⇄loop interface):
 - **In Progress** — claimed: Owner = run-id, claim comment (branch, worktree, timestamp).
 - **In Review** — PR open + linked.
 - **Blocked** — loop skips; Blocked reason says why; a human resolves.
-- **Done** — merged (+ deployed/smoked where configured); close comment with PR link.
+- **Done** — merged but not yet released (+ deployed/smoked where configured); close comment with PR link. `hamster release` archives Done items when their version ships, so the board stays a queue, not a history.
 
 Roles: **human = PM** (file issues, write acceptance criteria, set priority/size, flip Draft→Ready). **Loop = IC** (everything Ready→Done). `hamsterwheel init` provisions the board idempotently.
 
@@ -75,8 +75,14 @@ Cross-check issue state, not just board status: items linger in Ready after a me
 Never automated, regardless of config:
 
 - **Anything matching a `[[human]]` rule** (schema migrations to prod being the canonical, required rule; security/auth/payments labels and sensitive paths optional) — the merge parks as Blocked: needs-human naming the fired rule(s); a human reviews/applies.
-- **Releases** — the loop accumulates notes; a human cuts.
+- **Releases** — the loop accumulates; a human cuts, via `hamster release` (below).
 - **Anything irreversible or outward-facing** beyond merge+deploy+smoke → notify, don't act.
+
+## Releases (`hamster release`)
+
+The issue→version mapping is DERIVED from repo state, never recorded on the board: commits between semver tags → PRs (squash-title suffix) → the issues those PRs closed (`closingIssuesReferences`, batched). A per-item "Release" board field would be manual toil that drifts; git already holds the exact mapping.
+
+Human-invoked only (the "never cut unattended" gate is the human typing the command). Preview by default; `--execute` requires an explicit `--tag` (a suggested conventional-commit semver bump is printed, never auto-applied), creates the tag + GitHub Release pinned to the **remote** base tip, then archives exactly the shipped Done items — Projects v2 archive, restorable, issue untouched. Archive-on-release is what gives Done its semantic ("merged, not yet released") and keeps the board under the ~1200-item cap without losing anything: the history now lives in the release notes. Safety mirrors prune: an item is archived only when its issue is affirmatively closed; a failed lookup is a keep, reported separately from a failure. `--archive-done` is the backfill arm for boards that predate the command.
 
 ## Failure & reconciliation
 

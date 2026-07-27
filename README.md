@@ -12,7 +12,7 @@ hamsterwheel is a small set of pieces that let a coding agent grind through a ba
 
 ## Status
 
-**The loop driver is wired.** 🐹 `init` · `doctor` · `plan` · `once` · `run` · `triage` · `reconcile` · `prune` all do real work.
+**The loop driver is wired.** 🐹 `init` · `doctor` · `plan` · `once` · `run` · `triage` · `reconcile` · `prune` · `release` all do real work.
 
 Everything repo-specific lives in `hamsterwheel.toml` (see `hamsterwheel.example.toml`); nothing about a particular board, review bot, human-review rules (migration paths, sensitive labels) or model policy is hardcoded. That includes how much a server-side PR review counts: `review.mode` is `optional` by default, on the view that CI is the essential gate and the reviewing may well have happened locally — set it to `required` if a review bot's verdict should be load-bearing, or `off` to skip reviews entirely. Not yet: wave/parallel mode, post-merge deploy+smoke hooks, deny-by-default sandbox egress.
 
@@ -30,7 +30,9 @@ bun apps/cli/src/index.ts once --execute  # one issue, claim -> PR -> gate -> me
 bun apps/cli/src/index.ts run --execute   # until the Ready queue is empty
 ```
 
-`plan`, `reconcile` and `prune` (without `--delete`) never mutate anything. `once`/`run` mutate only with `--execute`.
+`plan`, `reconcile`, `prune` (without `--delete`) and `release` (without `--execute`) never mutate GitHub or the board. `once`/`run` mutate only with `--execute`.
+
+When a version ships, `hamster release --tag vX.Y.Z --execute` derives the notes from git (commits since the last tag → PRs → closed issues), creates the tag + GitHub Release, and archives the shipped Done items — the board stays a queue; the history lives in the release. Releases are the one mutation that is always human-invoked.
 
 ## Workspace layout
 

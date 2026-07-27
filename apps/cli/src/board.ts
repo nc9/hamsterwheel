@@ -264,6 +264,24 @@ export const setBlocked = async (
     ]).catch(() => {});
 };
 
+/**
+ * Archive (not delete) a board item — hidden from views and `item-list`, restorable from the
+ * project's archive. Used by `release`: Done means "merged, not yet released"; archiving at release
+ * time is what keeps the board a queue instead of a history.
+ */
+export const archiveItem = async (gh: Gh, ctx: BoardCtx, itemId: string): Promise<void> => {
+  await gh.text([
+    "api",
+    "graphql",
+    "-f",
+    "query=mutation($p:ID!,$i:ID!){archiveProjectV2Item(input:{projectId:$p,itemId:$i}){item{id}}}",
+    "-f",
+    `p=${ctx.projectId}`,
+    "-f",
+    `i=${itemId}`,
+  ]);
+};
+
 export const addItem = async (gh: Gh, ctx: BoardCtx, url: string): Promise<string> => {
   const r = await gh.json<{ id: string }>([
     "project",

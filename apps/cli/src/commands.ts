@@ -1,9 +1,14 @@
 import type { Config } from "@hamsterwheel/config";
-import { formatSessionPlan, resolveSessionPolicy } from "@hamsterwheel/gate";
+import { type SessionPlan, formatSessionPlan, resolveSessionPolicy } from "@hamsterwheel/gate";
 
 import { addItem, comment, fetchItemState, listItems, setBlocked, setStatus } from "./board.ts";
-import { buildQueue, enrichItem, isEpic, type LoopIssue } from "./issues.ts";
+import { buildQueue, enrichItem, isEpic, type LoopIssue, type QueueSkip } from "./issues.ts";
 import { type LoopDeps, claimAndRun } from "./pipeline.ts";
+
+/**
+ * Every read-style command returns a structured report and renders it separately, so `--json` emits the
+ * same data the human output is printed from — never a second, drifting code path.
+ */
 
 /** Shared context for every board-backed command. */
 export type CommandDeps = Omit<LoopDeps, "prOnly" | "sandbox" | "bypassPermissions"> & {
@@ -17,32 +22,70 @@ const fmt = (ns: number[]) => (ns.length ? ns.map((n) => `#${n}`).join(" ") : "n
 const policyOf = (cfg: Config, iss: LoopIssue) =>
   resolveSessionPolicy(iss, { implement: cfg.runners.implement, review: cfg.runners.review });
 
+export type PlanReport = {
+  eligible: {
+    number: number;
+    title: string;
+    priority: number;
+    size: number;
+    implement: SessionPlan;
+    review: SessionPlan;
+  }[];
+  skipped: QueueSkip[];
+  /** Issue number the loop would pick next, or null when the queue is empty. */
+  pick: number | null;
+};
+
 /** READ-ONLY: the queue, the skip reasons, and the resolved runner/model/effort per issue. No mutations. */
-export const plan = async (deps: CommandDeps): Promise<void> => {
-  const { gh, cfg, ctx, log } = deps;
+export const plan = async (deps: CommandDeps): Promise<PlanReport> => {
+  const { gh, cfg, ctx } = deps;
   const { eligible, skipped } = await buildQueue(gh, cfg, await listItems(gh, ctx));
+  return {
+    eligible: eligible.map((i) => {
+      const p = policyOf(cfg, i);
+      return {
+        number: i.number,
+        title: i.title,
+        priority: i.priority,
+        size: i.size,
+        implement: p.implement,
+        review: p.review,
+      };
+    }),
+    skipped,
+    pick: eligible[0]?.number ?? null,
+  };
+};
+
+export const renderPlan = (r: PlanReport, log: (m: string) => void): void => {
   log(`\nEligible queue (priority → size → age):`);
-  eligible.forEach((i, n) => {
-    const p = policyOf(cfg, i);
+  r.eligible.forEach((i, n) => {
     log(
       `  ${n + 1}. #${i.number} [P${i.priority} sz${i.size}] ${i.title.slice(0, 56)}\n` +
-        `        implement ${formatSessionPlan(p.implement)} · review ${formatSessionPlan(p.review)}`,
+        `        implement ${formatSessionPlan(i.implement)} · review ${formatSessionPlan(i.review)}`,
     );
   });
-  if (!eligible.length) log("  (none)");
-  if (skipped.length) {
+  if (!r.eligible.length) log("  (none)");
+  if (r.skipped.length) {
     log(`\nSkipped:`);
-    for (const s of skipped) log(`  #${s.num}: ${s.why}`);
+    for (const s of r.skipped) log(`  #${s.num}: ${s.why}`);
   }
-  log(eligible.length ? `\n→ would pick #${eligible[0]!.number}` : `\n→ queue empty, idle`);
+  log(r.pick !== null ? `\n→ would pick #${r.pick}` : `\n→ queue empty, idle`);
   log(
     `\n  (source key: r=runner m=model e=effort · l=label c=config h=heuristic r=runner-default)`,
   );
 };
 
+export type AutoBlockAction = {
+  issue: number;
+  reason: "injection" | "no-criteria";
+  markers?: string[];
+};
+
 /** Auto-block passes: missing acceptance criteria, and suspected prompt injection. Mutates the board. */
-export const runTriagePasses = async (deps: CommandDeps): Promise<void> => {
+export const runTriagePasses = async (deps: CommandDeps): Promise<AutoBlockAction[]> => {
   const { gh, cfg, ctx, log } = deps;
+  const actions: AutoBlockAction[] = [];
   const ready = (await listItems(gh, ctx)).filter((i) => i.status === cfg.board.status.ready);
   for (const item of ready) {
     const iss = await enrichItem(gh, cfg, item);
@@ -64,6 +107,7 @@ export const runTriagePasses = async (deps: CommandDeps): Promise<void> => {
         reason: "injection",
         markers: iss.injection,
       });
+      actions.push({ issue: iss.number, reason: "injection", markers: iss.injection });
       continue;
     }
     if (!iss.hasCriteria) {
@@ -76,12 +120,29 @@ export const runTriagePasses = async (deps: CommandDeps): Promise<void> => {
       );
       log(`#${iss.number}: Blocked → ${cfg.board.blockedReasons.needsCriteria}`);
       deps.runLog.append("triage-block", { issue: iss.number, reason: "no-criteria" });
+      actions.push({ issue: iss.number, reason: "no-criteria" });
     }
   }
+  return actions;
 };
 
-/** PM doctor: what needs human triage. Read-only unless `--sync` (adds missing issues as Draft). */
-export const triage = async (deps: CommandDeps, sync: boolean): Promise<void> => {
+export type TriageReport = {
+  board: { total: number; internal: number };
+  missing: { repo: string; number: number; url: string }[];
+  /** Whether --sync folded the missing issues onto the board. */
+  synced: boolean;
+  draftNeedsPriority: number[];
+  draftNeedsSize: number[];
+  readyNeedsCriteria: number[];
+  readyInjectionFlagged: number[];
+  readyEpics: number[];
+  blocked: number[];
+  eligible: number;
+  next: number | null;
+};
+
+/** PM doctor: what needs human triage. Read-only unless `sync` (adds missing issues as Draft). */
+export const triage = async (deps: CommandDeps, sync: boolean): Promise<TriageReport> => {
   const { gh, cfg, ctx, log } = deps;
   const items = await listItems(gh, ctx);
   const onBoard = new Set(
@@ -125,43 +186,77 @@ export const triage = async (deps: CommandDeps, sync: boolean): Promise<void> =>
   const readyEpics: number[] = [];
   for (const i of ready) if (await isEpic(gh, cfg, i.number, i.title)) readyEpics.push(i.number);
 
-  log(`\nTRIAGE — project #${ctx.projectNumber}`);
-  log(
-    `Board: ${items.length} items — ${internal.length} in ${cfg.repo}, ${items.length - internal.length} elsewhere\n`,
-  );
-  log(
-    `Not on board (open):      ${missing.length ? `${missing.map((m) => `${m.repo}#${m.number}`).join(" ")}${sync ? "  (synced ✓)" : "  [--sync to add]"}` : "none ✓"}`,
-  );
-  log(
-    `Draft · needs priority:   ${fmt(draft.filter((i) => i.priority === 9).map((i) => i.number))}`,
-  );
-  log(
-    `Draft · needs size:       ${fmt(draft.filter((i) => !i.labels.some((l) => l.toLowerCase().startsWith("size:"))).map((i) => i.number))}`,
-  );
-  log(
-    `Ready · needs criteria:   ${fmt(ready.filter((i) => !i.hasCriteria).map((i) => i.number))}  (auto-blocks on run)`,
-  );
-  log(
-    `Ready · injection-flagged:${fmt(ready.filter((i) => i.injection.length).map((i) => i.number))}`,
-  );
-  log(`Ready · epic (decompose): ${fmt(readyEpics)}`);
-  log(`Blocked (awaiting human): ${fmt(byStatus(cfg.board.status.blocked).map((i) => i.number))}`);
   const { eligible } = await buildQueue(gh, cfg, items);
+  return {
+    board: { total: items.length, internal: internal.length },
+    missing,
+    synced: sync,
+    draftNeedsPriority: draft.filter((i) => i.priority === 9).map((i) => i.number),
+    draftNeedsSize: draft
+      .filter((i) => !i.labels.some((l) => l.toLowerCase().startsWith("size:")))
+      .map((i) => i.number),
+    readyNeedsCriteria: ready.filter((i) => !i.hasCriteria).map((i) => i.number),
+    readyInjectionFlagged: ready.filter((i) => i.injection.length).map((i) => i.number),
+    readyEpics,
+    blocked: byStatus(cfg.board.status.blocked).map((i) => i.number),
+    eligible: eligible.length,
+    next: eligible[0]?.number ?? null,
+  };
+};
+
+export const renderTriage = (
+  r: TriageReport,
+  projectNumber: number,
+  cfgRepo: string,
+  log: (m: string) => void,
+): void => {
+  log(`\nTRIAGE — project #${projectNumber}`);
   log(
-    `\nReady & eligible: ${eligible.length}${eligible.length ? ` → next #${eligible[0]!.number}` : " (idle)"}`,
+    `Board: ${r.board.total} items — ${r.board.internal} in ${cfgRepo}, ${r.board.total - r.board.internal} elsewhere\n`,
   );
+  log(
+    `Not on board (open):      ${r.missing.length ? `${r.missing.map((m) => `${m.repo}#${m.number}`).join(" ")}${r.synced ? "  (synced ✓)" : "  [--sync to add]"}` : "none ✓"}`,
+  );
+  log(`Draft · needs priority:   ${fmt(r.draftNeedsPriority)}`);
+  log(`Draft · needs size:       ${fmt(r.draftNeedsSize)}`);
+  log(`Ready · needs criteria:   ${fmt(r.readyNeedsCriteria)}  (auto-blocks on run)`);
+  log(`Ready · injection-flagged:${fmt(r.readyInjectionFlagged)}`);
+  log(`Ready · epic (decompose): ${fmt(r.readyEpics)}`);
+  log(`Blocked (awaiting human): ${fmt(r.blocked)}`);
+  log(`\nReady & eligible: ${r.eligible}${r.next !== null ? ` → next #${r.next}` : " (idle)"}`);
+};
+
+export type ReconcileReport = {
+  inflight: { number: number | null; status: string; owner: string | null }[];
 };
 
 /** Report items stuck in flight with no live session behind them. Read-only: a human decides. */
-export const reconcile = async (deps: CommandDeps): Promise<void> => {
-  const { gh, cfg, ctx, log } = deps;
+export const reconcile = async (deps: CommandDeps): Promise<ReconcileReport> => {
+  const { gh, cfg, ctx } = deps;
   const inflight = (await listItems(gh, ctx)).filter(
     (i) => i.status === cfg.board.status.inProgress || i.status === cfg.board.status.inReview,
   );
-  if (!inflight.length) return log("reconcile: nothing in flight");
-  for (const it of inflight)
+  return {
+    inflight: inflight.map((i) => ({
+      number: i.content?.number ?? null,
+      status: i.status ?? "(none)",
+      owner:
+        typeof i.fields[cfg.board.ownerField.toLowerCase()] === "string"
+          ? (i.fields[cfg.board.ownerField.toLowerCase()] as string)
+          : null,
+    })),
+  };
+};
+
+export const renderReconcile = (
+  r: ReconcileReport,
+  cfg: Config,
+  log: (m: string) => void,
+): void => {
+  if (!r.inflight.length) return log("reconcile: nothing in flight");
+  for (const it of r.inflight)
     log(
-      `  in-flight: #${it.content?.number} [${it.status}] — verify a live run owns it (${cfg.board.ownerField} field), else reset to ${cfg.board.status.ready}`,
+      `  in-flight: #${it.number} [${it.status}] — verify a live run owns it (${cfg.board.ownerField} field${it.owner ? `: ${it.owner}` : ""}), else reset to ${cfg.board.status.ready}`,
     );
 };
 

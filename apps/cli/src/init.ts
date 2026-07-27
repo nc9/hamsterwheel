@@ -4,21 +4,34 @@ import { CONFIG_FILENAME, type Config, loadConfig, parseConfigText } from "@hams
 
 import { BLOCK_START, buildAgentDoc, spliceMarkedBlock } from "./agent-doc.ts";
 import { Gh } from "./gh.ts";
-import { printChecks, runChecks } from "./doctor.ts";
+import { type Check, printChecks, runChecks } from "./doctor.ts";
 
 /**
  * First-run setup. Idempotent, and it PRINTS EVERY MUTATION BEFORE MAKING IT — a first run against a
  * real org must never be a surprise. `--dry-run` stops after printing; `--yes` skips the prompts;
- * nothing outside `hamsterwheel.toml` is written without an explicit yes.
+ * nothing outside `hamsterwheel.toml` is written without an explicit yes. Off a TTY (agents, CI) it
+ * refuses to prompt at all: --yes or --dry-run is mandatory.
  */
 
 export type InitOptions = {
   cwd: string;
   yes: boolean;
   dryRun: boolean;
+  /** Board title, default "Loop". */
+  projectTitle?: string;
   log: (m: string) => void;
   ask?: (question: string) => Promise<string>;
   gh?: Gh;
+};
+
+/** Structured record of what init found and did — the `--json` output. */
+export type InitReport = {
+  checks: Check[];
+  repo?: string;
+  project?: { number: number; title: string } | null;
+  labelsCreated?: string[];
+  config?: { path: string; action: "written" | "overwritten" | "unchanged" | "kept" | "proposed" };
+  agentDocs?: { file: string; action: string }[];
 };
 
 const defaultAsk = async (question: string): Promise<string> => {
@@ -202,7 +215,8 @@ const ensureFields = async (
   }
 };
 
-const ensureLabels = async (gh: Gh, opts: InitOptions, repo: string): Promise<void> => {
+/** Returns the labels it created (or would create, on a dry run). */
+const ensureLabels = async (gh: Gh, opts: InitOptions, repo: string): Promise<string[]> => {
   const existing = new Set(
     (
       (await gh.tryJson<{ name: string }[]>([
@@ -218,11 +232,14 @@ const ensureLabels = async (gh: Gh, opts: InitOptions, repo: string): Promise<vo
     ).map((l) => l.name.toLowerCase()),
   );
   const missing = [...RANK_LABELS, ...LOOP_LABELS].filter((l) => !existing.has(l.toLowerCase()));
-  if (!missing.length) return opts.log("  · all loop labels present");
+  if (!missing.length) {
+    opts.log("  · all loop labels present");
+    return [];
+  }
   opts.log(
     `  + CREATE ${missing.length} label(s): ${missing.slice(0, 6).join(", ")}${missing.length > 6 ? " …" : ""}`,
   );
-  if (opts.dryRun) return;
+  if (opts.dryRun) return missing;
   for (const name of missing)
     await gh
       .text([
@@ -237,10 +254,15 @@ const ensureLabels = async (gh: Gh, opts: InitOptions, repo: string): Promise<vo
         "hamsterwheel",
       ])
       .catch(() => {});
+  return missing;
 };
 
-const writeAgentDocs = async (opts: InitOptions, cfg: Config): Promise<void> => {
+const writeAgentDocs = async (
+  opts: InitOptions,
+  cfg: Config,
+): Promise<{ file: string; action: string }[]> => {
   const block = buildAgentDoc(cfg);
+  const actions: { file: string; action: string }[] = [];
   opts.log("\n─── issue contract (paste into your agent guidance) ───────────────────────");
   opts.log(block);
   opts.log("──────────────────────────────────────────────────────────────────────────\n");
@@ -248,40 +270,62 @@ const writeAgentDocs = async (opts: InitOptions, cfg: Config): Promise<void> => 
     const path = `${opts.cwd}/${name}`;
     // never create agent guidance that doesn't exist yet
     const existing = await readFile(path, "utf8").catch(() => null);
-    if (existing === null) continue;
+    if (existing === null) {
+      actions.push({ file: name, action: "absent" });
+      continue;
+    }
     const next = spliceMarkedBlock(existing, block);
     if (next === null) {
       opts.log(
         `  ! ${name} has a ${BLOCK_START} marker with no matching end marker — leaving it alone`,
       );
+      actions.push({ file: name, action: "broken-markers" });
       continue;
     }
     if (next === existing) {
       opts.log(`  · ${name} already up to date`);
+      actions.push({ file: name, action: "unchanged" });
       continue;
     }
-    const verb = existing.includes(BLOCK_START)
-      ? "REPLACE the hamsterwheel block in"
-      : "APPEND the block to";
-    opts.log(`  + ${verb} ${name}`);
-    if (opts.dryRun) continue;
-    if (await confirm(opts, `    write ${name}?`)) await writeFile(path, next);
+    const replace = existing.includes(BLOCK_START);
+    opts.log(
+      `  + ${replace ? "REPLACE the hamsterwheel block in" : "APPEND the block to"} ${name}`,
+    );
+    if (opts.dryRun) {
+      actions.push({ file: name, action: "proposed" });
+      continue;
+    }
+    if (await confirm(opts, `    write ${name}?`)) {
+      await writeFile(path, next);
+      actions.push({ file: name, action: replace ? "replaced" : "appended" });
+    } else actions.push({ file: name, action: "declined" });
   }
+  return actions;
 };
 
-export const init = async (opts: InitOptions): Promise<number> => {
+export const init = async (opts: InitOptions): Promise<{ code: number; report: InitReport }> => {
   const gh = opts.gh ?? new Gh();
+  const report: InitReport = { checks: [] };
+  // Off a TTY there is nobody to answer a y/N prompt; hanging on stdin would look like a wedged agent.
+  const canPrompt = opts.ask !== undefined || process.stdin.isTTY === true;
+  if (!opts.yes && !opts.dryRun && !canPrompt) {
+    opts.log(
+      "✗ stdin is not a TTY, so init cannot prompt — pass --yes to apply every mutation, or --dry-run to preview them.",
+    );
+    return { code: 1, report };
+  }
   opts.log(`🐹 hamster init${opts.dryRun ? " (dry run — nothing will be written)" : ""}\n`);
 
   opts.log("Prerequisites:");
   const checks = await runChecks({ cwd: opts.cwd, gh });
+  report.checks = checks;
   printChecks(checks, opts.log);
   const blocking = checks.filter(
     (c) => c.status === "fail" && c.name !== "project board" && c.name !== "config",
   );
   if (blocking.length) {
     opts.log(`\n✗ fix the ${blocking.length} blocking problem(s) above first.`);
-    return 1;
+    return { code: 1, report };
   }
 
   const repo = await detectRepo(gh);
@@ -289,16 +333,18 @@ export const init = async (opts: InitOptions): Promise<number> => {
     opts.log(
       "\n✗ could not determine the repo (`gh repo view` failed) — run init inside a GitHub checkout.",
     );
-    return 1;
+    return { code: 1, report };
   }
+  report.repo = repo;
   const owner = repo.split("/")[0]!;
-  const title = "Loop";
+  const title = opts.projectTitle ?? "Loop";
   opts.log(`\nBoard (${owner}):`);
   const project = await ensureProject(gh, opts, owner, title);
+  report.project = project;
   if (project) await ensureFields(gh, opts, owner, project.number);
 
   opts.log(`\nLabels (${repo}):`);
-  await ensureLabels(gh, opts, repo);
+  report.labelsCreated = await ensureLabels(gh, opts, repo);
 
   const configPath = `${opts.cwd}/${CONFIG_FILENAME}`;
   const baseBranch =
@@ -323,27 +369,35 @@ export const init = async (opts: InitOptions): Promise<number> => {
   opts.log(`\nConfig:`);
   const current = await readFile(configPath, "utf8").catch(() => null);
   if (current !== null) {
-    if (current === rendered) opts.log(`  · ${CONFIG_FILENAME} already matches`);
-    else {
+    if (current === rendered) {
+      opts.log(`  · ${CONFIG_FILENAME} already matches`);
+      report.config = { path: configPath, action: "unchanged" };
+    } else {
       opts.log(`  ! ${CONFIG_FILENAME} exists and differs. Proposed:\n`);
       for (const line of rendered.split("\n")) opts.log(`    | ${line}`);
-      if (!opts.dryRun && (await confirm(opts, `  overwrite ${CONFIG_FILENAME}?`)))
+      if (!opts.dryRun && (await confirm(opts, `  overwrite ${CONFIG_FILENAME}?`))) {
         await writeFile(configPath, rendered);
-      else opts.log("  · kept the existing file");
+        report.config = { path: configPath, action: "overwritten" };
+      } else {
+        opts.log("  · kept the existing file");
+        report.config = { path: configPath, action: opts.dryRun ? "proposed" : "kept" };
+      }
     }
   } else {
     opts.log(`  + WRITE ${configPath}`);
+    report.config = { path: configPath, action: opts.dryRun ? "proposed" : "written" };
     if (!opts.dryRun) await writeFile(configPath, rendered);
   }
 
   // Parse what we just proposed so the agent-doc block reflects the real (validated) names even on a dry run.
   const cfg = await loadConfig(configPath).catch(() => parseConfigText(rendered));
-  await writeAgentDocs(opts, cfg);
+  report.agentDocs = await writeAgentDocs(opts, cfg);
 
   opts.log("\nSummary:");
-  printChecks(await runChecks({ cwd: opts.cwd, gh }), opts.log);
+  report.checks = await runChecks({ cwd: opts.cwd, gh });
+  printChecks(report.checks, opts.log);
   opts.log(
     `\nNext: edit \`migration_path_regex\` in ${CONFIG_FILENAME} for your repo, move an issue to Ready, then run \`hamster plan\`.`,
   );
-  return 0;
+  return { code: 0, report };
 };

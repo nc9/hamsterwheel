@@ -68,14 +68,23 @@ export const planPrune = async (gh: Gh, cfg: Config): Promise<PruneDecision[]> =
   return decisions;
 };
 
+export type PruneReport = {
+  dryRun: boolean;
+  decisions: PruneDecision[];
+  deleted: { branch: string; ok: boolean; was?: string; error?: string }[];
+};
+
 export const runPrune = async (
   gh: Gh,
   cfg: Config,
   opts: { delete: boolean; log: (m: string) => void },
-): Promise<void> => {
+): Promise<PruneReport> => {
   const decisions = await planPrune(gh, cfg);
-  if (!decisions.length)
-    return opts.log(`prune: no local ${cfg.branchPrefix}/*-wip-* branches found`);
+  const report: PruneReport = { dryRun: !opts.delete, decisions, deleted: [] };
+  if (!decisions.length) {
+    opts.log(`prune: no local ${cfg.branchPrefix}/*-wip-* branches found`);
+    return report;
+  }
   const toPrune = decisions.filter((d) => d.action === "prune");
   opts.log(
     `\nprune plan (${decisions.length} local WIP branch${decisions.length === 1 ? "" : "es"}):`,
@@ -86,7 +95,7 @@ export const runPrune = async (
   if (!opts.delete) {
     if (toPrune.length)
       opts.log("\n(dry run — pass --delete to actually remove these local branches)");
-    return;
+    return report;
   }
   // One explicit branch at a time, from a classified list — never a pattern handed to xargs. The
   // `(was <sha>)` git prints is logged because it is the only handle that makes a wrong delete
@@ -94,10 +103,12 @@ export const runPrune = async (
   // base branch, so `merge-base --is-ancestor` reports false loss.
   for (const d of toPrune) {
     const r = await deleteBranch(d.branch);
+    report.deleted.push({ branch: d.branch, ok: r.ok, was: r.was, error: r.error });
     opts.log(
       r.ok
         ? `  deleted ${d.branch}${r.was ? ` (was ${r.was} — restore with \`git branch ${d.branch} ${r.was}\`)` : ""}`
         : `  ✗ failed to delete ${d.branch}: ${r.error}`,
     );
   }
+  return report;
 };

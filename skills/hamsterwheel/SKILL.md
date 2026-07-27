@@ -83,6 +83,16 @@ Effort vocabularies differ per runner and a foreign value is dropped, not transl
 
 **Model ids are opaque vendor tokens, so validation is shape-only.** Nothing can tell that `sonnet` is meaningless to Codex. Two consequences: a `loop:impl-runner-*` label that switches vendors discards the config's model tiers rather than forwarding them, and you should not pin a vendor model id in config unless you intend to maintain it — leave `strong_model`/`cheap_model` unset and the runner uses the operator's own default.
 
+## Driving the CLI from an agent
+
+The CLI is built to be driven headless — no command ever needs a human at the keyboard:
+
+- **`--json` on every command**: exactly one JSON object on stdout (`{ ok, command, ... }`); all human progress text goes to stderr, so `hamster … --json | jq` always parses. Errors in `--json` mode are also JSON on stdout: `{ ok: false, error: { kind, message } }` with `kind` ∈ `usage | config | run-fatal | error`.
+- **`hamster <command> --help`** documents that command's flags, exit codes, and the exact `--json` shape. Trust it over memory.
+- **Flags are validated per command**: a flag on a command it doesn't apply to (e.g. `plan --delete`) exits 1 with the list of commands that accept it — it is never silently ignored.
+- **`once`/`run` `--json`** replays the structured run-log events (`claim`, `pr-open`, `gate`, `merged`, `blocked`, `failed`, …) plus a summary with counts — the same events written to `~/.hamsterwheel/runs/*.jsonl`.
+- **`init` never prompts off a TTY**: pass `--yes` to apply or `--dry-run` to preview (mandatory with `--json`); `--project-title <t>` overrides the default board title "Loop".
+
 ## Running a batch
 
 ```bash
@@ -128,4 +138,4 @@ A failure about **this** issue blocks this issue. A precondition that fails iden
 - `reference/adoption-checklist.md` — the pre-first-run checklist, including the silent-failure items
 - `reference/operating-lessons.md` — the paid-for lessons: git safety, review-loop bounds, quota signatures, parallel-wave hazards
 
-Full CLI surface: `hamster --help`. Config: `hamsterwheel.example.toml`. Architecture: `docs/design.md`.
+Full CLI surface: `hamster --help`, per-command detail (flags, exit codes, `--json` shape): `hamster <command> --help`. Config: `hamsterwheel.example.toml`. Architecture: `docs/design.md`.

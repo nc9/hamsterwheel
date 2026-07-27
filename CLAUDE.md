@@ -19,6 +19,8 @@ Extracted from a production loop that ran overnight autonomous implementation wa
 - TypeScript strict; kebab/snake-case filenames.
 - Conventional commits `type(scope): msg`. Direct pushes to `main` are fine while pre-1.0/solo.
 - Security-critical behavior (sandbox argv construction, what crosses the env/fs boundary, gate decisions) MUST be pure functions with unit tests — that separation is the point of the package split.
+- CLI conventions: agent-first. No interactivity (every input has a flag; `init` prompts only on a TTY and requires `--yes`/`--dry-run` otherwise), `--json` on EVERY command (one JSON object on stdout, human logs to stderr), per-command `--help` documenting flags, exit codes and the JSON shape, and flags are validated per command (a flag on the wrong command errors, never silently ignored). `apps/cli/src/args.ts` FLAG_SPECS is the single source of truth.
+- `skills/hamsterwheel/SKILL.md` is the operator manual. Update it IN THE SAME CHANGE as anything user-facing: CLI commands/flags/output, board vocabulary, label routing, gate behavior, config schema. A stale skill silently teaches agents the old interface.
 
 ## Design lessons (from the source loop)
 

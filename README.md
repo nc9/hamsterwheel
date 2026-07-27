@@ -83,4 +83,6 @@ hamster doctor
 
 Needs `git`, `gh` (authenticated, with the `project` scope), and at least one agent CLI on PATH. `docker` only for `--sandbox`. `hamster doctor` tells you which of those are missing.
 
+The CLI is agent-first: nothing is interactive (every input is a flag; `init` prompts only on a TTY, `--yes`/`--dry-run` otherwise), every command takes `--json` (one JSON object on stdout, human progress on stderr), and `hamster <command> --help` documents each command's flags, exit codes, and JSON shape. Flags are validated per command — a flag on the wrong command errors instead of being silently ignored.
+
 The source is written against node APIs on purpose, so the same code runs under both runtimes with no shim. A CI job installs the packed tarball and runs it under node to keep it that way — a stray `Bun.file` would break every npm consumer and would otherwise only surface after a release.

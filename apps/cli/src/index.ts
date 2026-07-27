@@ -11,12 +11,15 @@ import {
 } from "@hamsterwheel/config";
 
 import pkg from "../package.json";
-import { type ParsedArgs, parseArgs } from "./args.ts";
+import { type ParsedArgs, parseArgs, validateArgs } from "./args.ts";
 import { loadBoardCtx } from "./board.ts";
 import {
   type CommandDeps,
   plan,
   reconcile,
+  renderPlan,
+  renderReconcile,
+  renderTriage,
   runTriagePasses,
   triage,
   workQueue,
@@ -24,40 +27,13 @@ import {
 import { doctor } from "./doctor.ts";
 import { RunFatalError, runFatalReason } from "./errors.ts";
 import { Gh } from "./gh.ts";
+import { commandHelp, globalHelp } from "./help.ts";
 import { init } from "./init.ts";
 import { preflight } from "./preflight.ts";
 import { runPrune } from "./prune.ts";
-import { createRunLog, makeRunId } from "./runlog.ts";
+import { type RunLog, createRunLog, makeRunId } from "./runlog.ts";
 
-const log = (...m: unknown[]) => console.log(...m);
-
-export const HELP = `🐹 hamsterwheel v${pkg.version}
-An autonomous issue loop for coding agents: you sleep, the hamster runs the wheel.
-
-Usage:
-  hamster <command> [options]
-
-Commands:
-  init       verify prerequisites, provision the board + labels, write ${CONFIG_FILENAME}
-  doctor     re-run just the prerequisite checks
-  plan       read-only: the eligible queue, skip reasons, and the resolved runner/model/effort
-  once       one issue end to end (claim → PR → gate → merge / Blocked)
-  run        loop \`once\` until the Ready queue is empty (serial)
-  triage     PM doctor + the auto-block passes (missing criteria, suspected injection)
-  reconcile  report in-flight items with no live session behind them
-  prune      classify and clean up stale local WIP salvage branches
-
-Flags:
-  --execute          do real work (once/run mutate the board only with this)
-  --issue <n>        target a specific Ready+eligible issue
-  --pr-only          stop at the open PR: skip the merge gate (supervised runs)
-  --sandbox          OS-isolate the sessions in a container
-  --bypass           claude: full bypassPermissions instead of the scoped allow-list (loud, supervised)
-  --sync             triage: add open issues missing from the board as Draft
-  --delete           prune: actually delete (default is a dry-run plan)
-  --yes / --dry-run  init: non-interactive / print-only
-  --config <path>    use a specific ${CONFIG_FILENAME}
-  --version, --help  version / help`;
+export const HELP = globalHelp(pkg.version);
 
 /** Resolve the config for a board-backed command, or explain why we can't. */
 const resolveConfig = async (args: ParsedArgs): Promise<Config> => {
@@ -69,102 +45,226 @@ const resolveConfig = async (args: ParsedArgs): Promise<Config> => {
   return loadConfig(path);
 };
 
+/** JSON-mode error payload: same taxonomy the human output uses, machine-readable. */
+const describeError = (e: unknown): Record<string, unknown> => {
+  if (e instanceof RunFatalError)
+    return { kind: "run-fatal", message: e.message, ...(e.hint ? { hint: e.hint } : {}) };
+  if (e instanceof ConfigError) return { kind: "config", problems: e.problems };
+  const fatal = runFatalReason(e);
+  if (fatal) return { kind: "run-fatal", message: fatal };
+  return { kind: "error", message: e instanceof Error ? e.message : String(e) };
+};
+
 export const main = async (argv: string[]): Promise<number> => {
   const args = parseArgs(argv);
-  if (args.unknown.length) {
-    console.error(
-      `unknown or malformed argument(s): ${args.unknown.join(", ")}\nrun \`hamster --help\`.`,
+  // In --json mode stdout carries exactly one JSON object; every human-facing line goes to stderr so
+  // `hamster … --json | jq` never chokes on progress text.
+  const log = (...m: unknown[]) => (args.json ? console.error(...m) : console.log(...m));
+  const emit = (obj: Record<string, unknown>) =>
+    console.log(JSON.stringify({ ok: true, command: args.command, ...obj }, null, 2));
+  const fail = (code: number, message: string, extra?: Record<string, unknown>): number => {
+    if (args.json)
+      console.log(
+        JSON.stringify(
+          { ok: false, command: args.command, error: { kind: "usage", message }, ...extra },
+          null,
+          2,
+        ),
+      );
+    console.error(message);
+    return code;
+  };
+
+  const problems = [
+    ...args.unknown.map((u) => `unknown or malformed argument: ${u}`),
+    ...validateArgs(args),
+  ];
+  if (problems.length)
+    return fail(
+      1,
+      `${problems.join("\n")}\nrun \`hamster ${args.command ? `${args.command} ` : ""}--help\`.`,
     );
-    return 1;
-  }
+  // Even help/version honor the single-JSON-object contract when --json is passed.
   if (args.version) {
-    log(pkg.version);
+    console.log(args.json ? JSON.stringify({ ok: true, version: pkg.version }) : pkg.version);
     return 0;
   }
   if (args.help || args.command === null) {
-    log(HELP);
+    const text = args.command ? commandHelp(args.command, pkg.version) : HELP;
+    console.log(args.json ? JSON.stringify({ ok: true, command: args.command, help: text }) : text);
     return 0;
   }
 
   // Checked before anything reads config or touches GitHub: a `run` typed without --execute should cost
   // nothing and change nothing.
-  if (args.command === "run" && !args.execute) {
-    log(
+  if (args.command === "run" && !args.execute)
+    return fail(
+      1,
       "⚠ `run` requires --execute to loop — use `once` for a single dry pass, or `plan` to inspect.",
     );
-    return 1;
-  }
+  // --json cannot answer a y/N prompt; require the intent up front instead of dying mid-provision.
+  if (args.command === "init" && args.json && !args.yes && !args.dryRun)
+    return fail(1, "init --json is non-interactive — pass --yes to apply or --dry-run to preview.");
 
-  const gh = new Gh();
-  if (args.command === "init")
-    return init({ cwd: process.cwd(), yes: args.yes, dryRun: args.dryRun, log, gh });
-  if (args.command === "doctor") return doctor({ cwd: process.cwd(), log, gh });
-
-  const cfg = await resolveConfig(args);
-
-  // prune needs no board — it runs standalone, ahead of any project lookup.
-  if (args.command === "prune") {
-    log(`🐹 prune${args.delete ? " (--delete)" : " (dry run)"}`);
-    await runPrune(gh, cfg, { delete: args.delete, log });
-    return 0;
-  }
-
-  const ctx = await loadBoardCtx(gh, cfg);
-  const readOnly = args.command === "plan" || args.command === "reconcile";
-  const deps: CommandDeps = {
-    gh,
-    cfg,
-    ctx,
-    log,
-    runLog: createRunLog({ dir: `${process.env.HOME}/.hamsterwheel/runs`, runId: makeRunId(0) }),
-    prOnly: args.prOnly,
-    sandbox: args.sandbox,
-    bypassPermissions: args.bypass,
-  };
-  log(
-    `🐹 hamsterwheel — ${cfg.repo} · project #${ctx.projectNumber} · ${args.command}${args.execute ? " (--execute)" : ""}`,
-  );
-  if (!readOnly) deps.runLog.append("start", { command: args.command, execute: args.execute });
-
-  switch (args.command) {
-    case "plan":
-      await plan(deps);
-      return 0;
-    case "reconcile":
-      await reconcile(deps);
-      return 0;
-    case "triage":
-      await triage(deps, args.sync);
-      // The auto-block passes MUTATE the board, so they stay behind --execute like every other write.
-      if (args.execute) await runTriagePasses(deps);
-      else log("\n(read-only: pass --execute to apply the auto-block passes)");
-      return 0;
-    default: {
-      if (args.bypass && !args.sandbox)
-        log(
-          "⚠ --bypass without --sandbox: the session gets unrestricted tools with no isolation boundary.",
-        );
-      // Refuse to START on a precondition that would fail identically for every item. Discovering it
-      // per-issue is how a whole curated Ready queue got burned into Blocked in under a minute.
-      if (args.execute) preflight({ cfg, sandbox: args.sandbox });
-      if (args.execute) await runTriagePasses(deps);
-      try {
-        await workQueue(deps, {
-          loop: args.command === "run",
-          execute: args.execute,
-          issue: args.issue,
-        });
-      } catch (e) {
-        const fatal = runFatalReason(e);
-        if (!fatal) throw e;
-        // The in-flight item was already released back to Ready; everything behind it is untouched.
-        log(`\n✗ run aborted — ${fatal}`);
-        log("  (the queue is intact: the claimed item was released, nothing else was touched)");
-        deps.runLog.append("run-aborted", { reason: fatal });
-        return 1;
-      }
-      return 0;
+  try {
+    const gh = new Gh();
+    if (args.command === "init") {
+      const { code, report } = await init({
+        cwd: process.cwd(),
+        yes: args.yes,
+        dryRun: args.dryRun,
+        projectTitle: args.projectTitle,
+        log,
+        gh,
+      });
+      if (args.json)
+        console.log(JSON.stringify({ ok: code === 0, command: "init", ...report }, null, 2));
+      return code;
     }
+    if (args.command === "doctor") {
+      const { code, checks } = await doctor({ cwd: process.cwd(), log, gh });
+      if (args.json)
+        console.log(
+          JSON.stringify(
+            {
+              ok: code === 0,
+              command: "doctor",
+              checks,
+              failed: checks.filter((c) => c.status === "fail").length,
+              warned: checks.filter((c) => c.status === "warn").length,
+            },
+            null,
+            2,
+          ),
+        );
+      return code;
+    }
+
+    const cfg = await resolveConfig(args);
+
+    // prune needs no board — it runs standalone, ahead of any project lookup.
+    if (args.command === "prune") {
+      log(`🐹 prune${args.delete ? " (--delete)" : " (dry run)"}`);
+      const report = await runPrune(gh, cfg, { delete: args.delete, log });
+      const failed = report.deleted.some((d) => !d.ok);
+      if (args.json) emit({ ...report, ok: !failed } as Record<string, unknown>);
+      return failed ? 1 : 0;
+    }
+
+    const ctx = await loadBoardCtx(gh, cfg);
+    const readOnly = args.command === "plan" || args.command === "reconcile";
+    // Tee the run log so --json can replay the exact structured events the .jsonl file records.
+    const events: Record<string, unknown>[] = [];
+    const base = createRunLog({
+      dir: `${process.env.HOME}/.hamsterwheel/runs`,
+      runId: makeRunId(0),
+    });
+    const runLog: RunLog = {
+      ...base,
+      append: (event, data = {}) => {
+        base.append(event, data);
+        // Same shape as the .jsonl lines, so "events mirror the run log" is literally true.
+        events.push({ ts: new Date().toISOString(), run: base.runId, event, ...data });
+      },
+    };
+    const deps: CommandDeps = {
+      gh,
+      cfg,
+      ctx,
+      log,
+      runLog,
+      prOnly: args.prOnly,
+      sandbox: args.sandbox,
+      bypassPermissions: args.bypass,
+    };
+    log(
+      `🐹 hamsterwheel — ${cfg.repo} · project #${ctx.projectNumber} · ${args.command}${args.execute ? " (--execute)" : ""}`,
+    );
+    if (!readOnly) runLog.append("start", { command: args.command, execute: args.execute });
+
+    switch (args.command) {
+      case "plan": {
+        const report = await plan(deps);
+        if (args.json) emit({ ...report });
+        else renderPlan(report, log);
+        return 0;
+      }
+      case "reconcile": {
+        const report = await reconcile(deps);
+        if (args.json) emit({ ...report });
+        else renderReconcile(report, cfg, log);
+        return 0;
+      }
+      case "triage": {
+        const report = await triage(deps, args.sync);
+        if (!args.json) renderTriage(report, ctx.projectNumber, cfg.repo, log);
+        // The auto-block passes MUTATE the board, so they stay behind --execute like every other write.
+        let autoBlocked: Awaited<ReturnType<typeof runTriagePasses>> = [];
+        if (args.execute) autoBlocked = await runTriagePasses(deps);
+        else log("\n(read-only: pass --execute to apply the auto-block passes)");
+        if (args.json) emit({ ...report, autoBlocked });
+        return 0;
+      }
+      default: {
+        if (args.bypass && !args.sandbox)
+          log(
+            "⚠ --bypass without --sandbox: the session gets unrestricted tools with no isolation boundary.",
+          );
+        // Refuse to START on a precondition that would fail identically for every item. Discovering it
+        // per-issue is how a whole curated Ready queue got burned into Blocked in under a minute.
+        if (args.execute) preflight({ cfg, sandbox: args.sandbox });
+        if (args.execute) await runTriagePasses(deps);
+        const summarize = () => {
+          const count = (e: string) => events.filter((x) => x["event"] === e).length;
+          return {
+            claimed: count("claim"),
+            prsOpened: count("pr-open"),
+            merged: count("merged"),
+            done: count("done"),
+            blocked: count("blocked"),
+            failed: count("failed"),
+          };
+        };
+        try {
+          await workQueue(deps, {
+            loop: args.command === "run",
+            execute: args.execute,
+            issue: args.issue,
+          });
+        } catch (e) {
+          const fatal = runFatalReason(e);
+          if (!fatal) throw e;
+          // The in-flight item was already released back to Ready; everything behind it is untouched.
+          log(`\n✗ run aborted — ${fatal}`);
+          log("  (the queue is intact: the claimed item was released, nothing else was touched)");
+          runLog.append("run-aborted", { reason: fatal });
+          if (args.json)
+            console.log(
+              JSON.stringify(
+                {
+                  ok: false,
+                  command: args.command,
+                  execute: args.execute,
+                  error: { kind: "run-fatal", message: fatal },
+                  events,
+                  summary: summarize(),
+                },
+                null,
+                2,
+              ),
+            );
+          return 1;
+        }
+        if (args.json) emit({ execute: args.execute, events, summary: summarize() });
+        return 0;
+      }
+    }
+  } catch (e) {
+    if (!args.json) throw e;
+    console.log(
+      JSON.stringify({ ok: false, command: args.command, error: describeError(e) }, null, 2),
+    );
+    return 1;
   }
 };
 

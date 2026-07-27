@@ -157,7 +157,7 @@ export const doctor = async (opts: {
   cwd: string;
   log: (m: string) => void;
   gh?: Gh;
-}): Promise<number> => {
+}): Promise<{ code: number; checks: Check[] }> => {
   const checks = await runChecks(opts);
   opts.log("🐹 hamster doctor\n");
   printChecks(checks, opts.log);
@@ -166,5 +166,5 @@ export const doctor = async (opts: {
   opts.log(
     `\n${failed.length ? `${failed.length} blocking problem(s)` : "ready"}${warned.length ? `, ${warned.length} warning(s)` : ""}.`,
   );
-  return failed.length ? 1 : 0;
+  return { code: failed.length ? 1 : 0, checks };
 };

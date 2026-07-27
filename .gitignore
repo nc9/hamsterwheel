@@ -4,3 +4,6 @@ build/
 *.log
 .DS_Store
 .env*
+
+# npm auth — may be rewritten with a literal token by `npm login`
+.npmrc

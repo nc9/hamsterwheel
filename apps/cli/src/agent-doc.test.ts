@@ -6,8 +6,10 @@ import { BLOCK_END, BLOCK_START, buildAgentDoc, spliceMarkedBlock } from "./agen
 const cfg = parseConfig(
   Bun.TOML.parse(`
 repo = "acme/backend"
-migration_path_regex = "(^|/)drizzle/"
 criteria_heading = "Done when"
+[[human]]
+name = "prod-migration"
+paths = "(^|/)drizzle/"
 [project]
 number = 1
 [board.status]

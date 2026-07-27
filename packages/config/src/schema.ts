@@ -20,11 +20,21 @@ export type StatusNames = {
 /** Blocked-reason option names, keyed by the reason the gate emits (`mergeDecision().reason` et al). */
 export type BlockedReasonNames = {
   needsCriteria: string;
-  needsProdMigration: string;
+  needsHuman: string;
   needsDecision: string;
   depOpen: string;
   ciRed: string;
   rubricFail: string;
+};
+
+/**
+ * A "never auto-merge, park for a human" tripwire. Fires when the PR's changed files match `pathsRe`
+ * OR the issue carries one of `labels` (case-insensitive). At least one of the two is present.
+ */
+export type HumanRule = {
+  name: string;
+  pathsRe?: RegExp;
+  labels?: string[];
 };
 
 export type RoleConfig = {
@@ -53,7 +63,8 @@ export type Config = {
     blockedReasons: BlockedReasonNames;
   };
   review: { bot: string; blockingSeverityRe: RegExp };
-  migrationPathRe: RegExp;
+  /** `[[human]]` rules — any hit parks the PR as Blocked: needs-human instead of auto-merging. */
+  humanRules: HumanRule[];
   criteriaHeading: string;
   installCmd: string;
   smokeCmd?: string;
@@ -85,7 +96,7 @@ const DEFAULT_STATUS: StatusNames = {
 };
 const DEFAULT_BLOCKED: BlockedReasonNames = {
   needsCriteria: "needs-criteria",
-  needsProdMigration: "needs-prod-migration",
+  needsHuman: "needs-human",
   needsDecision: "needs-decision",
   depOpen: "dep-open",
   ciRed: "ci-red",
@@ -229,6 +240,63 @@ const readRole = (
   };
 };
 
+/** Parse the `[[human]]` array of tables. Every problem is recorded on the reader, none thrown. */
+const readHumanRules = (r: Reader, raw: unknown): HumanRule[] => {
+  if (raw === undefined) return [];
+  if (!Array.isArray(raw) || raw.some((e) => !isBag(e))) {
+    r.fail("human must be an array of tables ([[human]] blocks)");
+    return [];
+  }
+  const rules: HumanRule[] = [];
+  const seen = new Set<string>();
+  raw.forEach((entry, i) => {
+    const bag = entry as Bag;
+    const at = `human[${i}]`;
+    for (const k of Object.keys(bag))
+      if (!["name", "paths", "labels"].includes(k)) r.fail(`${at}.${k} is not a known key`);
+    const name = bag["name"];
+    if (typeof name !== "string" || !name.trim()) {
+      r.fail(`${at}.name is required (a short identifier, e.g. "prod-migration")`);
+      return;
+    }
+    const id = name.trim();
+    if (seen.has(id.toLowerCase())) r.fail(`${at}.name "${id}" is duplicated`);
+    seen.add(id.toLowerCase());
+
+    let pathsRe: RegExp | undefined;
+    const paths = bag["paths"];
+    if (paths !== undefined) {
+      if (typeof paths !== "string" || !paths.trim())
+        r.fail(`${at}.paths must be a non-empty regex string`);
+      else
+        try {
+          pathsRe = new RegExp(paths, "i");
+        } catch (e) {
+          r.fail(`${at}.paths is not a valid regular expression: ${String(e)}`);
+        }
+    }
+
+    let labels: string[] | undefined;
+    const rawLabels = bag["labels"];
+    if (rawLabels !== undefined) {
+      if (
+        !Array.isArray(rawLabels) ||
+        rawLabels.length === 0 ||
+        rawLabels.some((l) => typeof l !== "string" || !l.trim())
+      )
+        r.fail(`${at}.labels must be a non-empty array of non-empty strings`);
+      else labels = (rawLabels as string[]).map((l) => l.trim());
+    }
+
+    if (pathsRe === undefined && labels === undefined) {
+      r.fail(`${at} ("${id}") needs paths and/or labels — a rule that can never fire is a typo`);
+      return;
+    }
+    rules.push({ name: id, ...(pathsRe ? { pathsRe } : {}), ...(labels ? { labels } : {}) });
+  });
+  return rules;
+};
+
 /**
  * Validate a parsed TOML document into a `Config`. Pure — no file IO, no env, no clock — so the whole
  * validation surface is unit-testable. Throws `ConfigError` carrying every problem found.
@@ -281,10 +349,7 @@ export const parseConfig = (raw: unknown, opts: { home?: string } = {}): Config 
       },
       blockedReasons: {
         needsCriteria: r.str("board.blocked_reasons.needs_criteria", DEFAULT_BLOCKED.needsCriteria),
-        needsProdMigration: r.str(
-          "board.blocked_reasons.needs_prod_migration",
-          DEFAULT_BLOCKED.needsProdMigration,
-        ),
+        needsHuman: r.str("board.blocked_reasons.needs_human", DEFAULT_BLOCKED.needsHuman),
         needsDecision: r.str("board.blocked_reasons.needs_decision", DEFAULT_BLOCKED.needsDecision),
         depOpen: r.str("board.blocked_reasons.dep_open", DEFAULT_BLOCKED.depOpen),
         ciRed: r.str("board.blocked_reasons.ci_red", DEFAULT_BLOCKED.ciRed),
@@ -298,9 +363,7 @@ export const parseConfig = (raw: unknown, opts: { home?: string } = {}): Config 
         /\(\s*(high|critical)\s*\)|🔴|\[(critical|high)\]|severity:\s*(high|critical)/i,
       ),
     },
-    // No safe default: a repo with migrations and no pattern would auto-merge schema changes, which is
-    // the one thing that must never happen. Required, and an empty value is a validation failure.
-    migrationPathRe: r.regex("migration_path_regex", /(?!)/),
+    humanRules: readHumanRules(r, raw.human),
     criteriaHeading: r.str("criteria_heading", "Acceptance Criteria"),
     installCmd: r.str("install_cmd", "bun install"),
     smokeCmd: r.optStr("smoke_cmd"),
@@ -319,9 +382,18 @@ export const parseConfig = (raw: unknown, opts: { home?: string } = {}): Config 
     maxIterations: r.num("max_iterations", 50),
     worktreeRoot: r.str("worktree_root", `${home}/.hamsterwheel/worktrees`),
   };
-  if (raw.migration_path_regex === undefined)
+  // Hard break from the pre-[[human]] config surface: silently ignoring the old key would drop the
+  // migration guard without a sound.
+  if (raw.migration_path_regex !== undefined)
     r.fail(
-      "migration_path_regex is required — without it a PR touching a schema migration could auto-merge",
+      'migration_path_regex was replaced by [[human]] rules — e.g.\n      [[human]]\n      name = "prod-migration"\n      paths = "(^|/)(migrations|drizzle)/"',
+    );
+  // No safe default: a repo with migrations and no path rule would auto-merge schema changes, which is
+  // the one thing that must never happen. Label-only rules don't satisfy this — labels are optional
+  // human input; paths are facts about the diff.
+  if (!cfg.humanRules.some((h) => h.pathsRe !== undefined))
+    r.fail(
+      "at least one [[human]] rule with `paths` is required — without it a PR touching a schema migration could auto-merge",
     );
 
   if (r.problems.length) throw new ConfigError(r.problems);

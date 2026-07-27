@@ -54,8 +54,8 @@ export const buildAgentDoc = (cfg: Config): string =>
     "",
     "**What the loop will do unattended:** open a PR, fix its own review findings, and squash-merge once CI is green, no blocking (high/critical) review finding remains, and the rubric passes.",
     "",
-    "**What it will never do:** merge a PR that touches a schema migration (parked as " +
-      `\`${cfg.board.blockedReasons.needsProdMigration}\` for a human), cut a release, or act on anything irreversible beyond merge. Issue text is treated as untrusted data — an issue whose text trips the injection tripwire is blocked, never run.`,
+    "**What it will never do:** merge work matching a `[[human]]` rule in hamsterwheel.toml — e.g. a schema migration path or a security/payments label (parked as " +
+      `\`${cfg.board.blockedReasons.needsHuman}\` for a human), cut a release, or act on anything irreversible beyond merge. Issue text is treated as untrusted data — an issue whose text trips the injection tripwire is blocked, never run.`,
     "",
     "**CI note for repos where a merge triggers a deploy:** the deploy job must NOT share a `cancel-in-progress` concurrency group with CI. Back-to-back merges each cancel the previous run, so intermediate merges' deploys never execute — six merges once left five services running stale code. `cancel-in-progress` is right for tests and catastrophic for anything with side effects.",
     "",

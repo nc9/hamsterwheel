@@ -12,10 +12,12 @@ import { branchName, buildQueue } from "./issues.ts";
 const cfg = parseConfig(
   Bun.TOML.parse(`
 repo = "acme/backend"
-migration_path_regex = "(^|/)drizzle/"
 [project]
 number = 7
 title = "Loop"
+[[human]]
+name = "prod-migration"
+paths = "(^|/)drizzle/"
 `),
   { home: "/home/ci" },
 );

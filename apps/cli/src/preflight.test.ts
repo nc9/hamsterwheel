@@ -9,7 +9,9 @@ import { preflight, preflightProblems } from "./preflight.ts";
 const cfg = parseConfig(
   Bun.TOML.parse(`
 repo = "acme/backend"
-migration_path_regex = "(^|/)drizzle/"
+[[human]]
+name = "prod-migration"
+paths = "(^|/)drizzle/"
 [project]
 number = 1
 [runners.implement]

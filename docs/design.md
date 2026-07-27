@@ -4,19 +4,19 @@ Target architecture for the config-driven loop driver (roadmap items in CLAUDE.m
 
 ## Philosophy
 
-Thin **deterministic driver** + model-driven per-issue sessions. Safety-critical decisions (merge, migration parking, claim, reconcile) are code — `@hamsterwheel/gate` — not LLM judgment. The LLM does the creative work (implement, fix findings) in sandboxed headless sessions; a fresh adversarial session grades the result.
+Thin **deterministic driver** + model-driven per-issue sessions. Safety-critical decisions (merge, human-rule parking, claim, reconcile) are code — `@hamsterwheel/gate` — not LLM judgment. The LLM does the creative work (implement, fix findings) in sandboxed headless sessions; a fresh adversarial session grades the result.
 
 ## Control plane: GitHub Projects v2
 
 One project board is the single source of truth — no external tracker, no sync boundary.
 
-| Field          | Type          | Values                                                                                   |
-| -------------- | ------------- | ---------------------------------------------------------------------------------------- |
-| Status         | single-select | Draft · Ready · In Progress · In Review · Blocked · Done                                 |
-| Priority       | single-select | P0 · P1 · P2 · P3                                                                        |
-| Size           | single-select | XS · S · M · L · XL                                                                      |
-| Owner          | text          | run-id of the claiming session                                                           |
-| Blocked reason | single-select | needs-criteria · needs-prod-migration · needs-decision · dep-open · ci-red · rubric-fail |
+| Field          | Type          | Values                                                                          |
+| -------------- | ------------- | ------------------------------------------------------------------------------- |
+| Status         | single-select | Draft · Ready · In Progress · In Review · Blocked · Done                        |
+| Priority       | single-select | P0 · P1 · P2 · P3                                                               |
+| Size           | single-select | XS · S · M · L · XL                                                             |
+| Owner          | text          | run-id of the claiming session                                                  |
+| Blocked reason | single-select | needs-criteria · needs-human · needs-decision · dep-open · ci-red · rubric-fail |
 
 Status semantics (the whole human⇄loop interface):
 
@@ -62,7 +62,7 @@ Cross-check issue state, not just board status: items linger in Ready after a me
 4. **Classify** — `classifyImplement`: `pr` | `resolved` | `maybe-resolved` (corroborate with a prior merged closing PR before Done) | `fail` (salvage the dirty tree to a WIP branch).
 5. **Review loop** — wait for the configured review bot; triage every finding; fix NEW ones, rebut re-raised ones with file:line (the reviewer is stateless). **Cap: 4 rounds** (`max_review_rounds`). The reviewer re-derives from scratch every run, so each fix push triggers another deeper pass and it never converges: measured on a ~50-line PR, 6 rounds with findings 3→6→3→3→3→3, nothing substantive after round 3-4, and rounds 5-6 objecting to flags and identifiers that do not exist. The escape hatch is that a PR _comment_ does not trigger re-review — only a push does — so the loop posts the remaining findings as a comment and parks the PR for a human. Whatever produced a signal must be what re-verifies it: re-run the review, not just CI.
 6. **Rubric gate** — fresh adversarial READ-ONLY session grades each criterion against the resulting codebase; `applyCiToRubric` credits execution-dependent criteria from CI; `parseRubricVerdict` parses the verdict. Diff against the **merge-base**, never the live `origin/<base>` ref: linked worktrees share one ref store, so a peer lane's fetch advances it and the diff then shows other lanes' merged work reversed — a review once raised HIGH-severity "guard was removed" findings for files the branch never touched.
-7. **Merge gate** — `mergeDecision`: CI green → no migration (config path regex) → no blocking review findings → rubric pass. Any miss → Blocked with the matching reason. Squash-merge, delete branch.
+7. **Merge gate** — `mergeDecision`: CI green → no `[[human]]` rule fired (config path regexes + issue labels) → no blocking review findings → rubric pass. Any miss → Blocked with the matching reason. Squash-merge, delete branch.
 8. **Post-merge (configurable hooks)** — wait for the deploy workflow; run the smoke command. Failures notify; never auto-rollback.
 9. **Close** — Status→Done, close comment (PR, commit, smoke result).
 10. **Cleanup** — remove the worktree (salvage first if dirty), prune stale salvage branches conservatively.
@@ -71,7 +71,7 @@ Cross-check issue state, not just board status: items linger in Ready after a me
 
 Never automated, regardless of config:
 
-- **Schema migrations to prod** — the merge parks as Blocked: needs-prod-migration; a human applies.
+- **Anything matching a `[[human]]` rule** (schema migrations to prod being the canonical, required rule; security/auth/payments labels and sensitive paths optional) — the merge parks as Blocked: needs-human naming the fired rule(s); a human reviews/applies.
 - **Releases** — the loop accumulates notes; a human cuts.
 - **Anything irreversible or outward-facing** beyond merge+deploy+smoke → notify, don't act.
 
@@ -100,7 +100,7 @@ Serial by default: one issue start→merge→next, so double-claims and cross-PR
 
 ## Config (`hamsterwheel.toml`)
 
-repo slug · project board (field + option NAMES, never hardcoded) · base branch · branch prefix · review bot name + blocking-severity regex · migration path regex · install cmd · smoke/deploy hooks · allowed tools · runner+model+effort policy per role (default + validated label override) · session timeout · CI timeout · max review rounds · max iterations.
+repo slug · project board (field + option NAMES, never hardcoded) · base branch · branch prefix · review bot name + blocking-severity regex · `[[human]]` rules (paths/labels) · install cmd · smoke/deploy hooks · allowed tools · runner+model+effort policy per role (default + validated label override) · session timeout · CI timeout · max review rounds · max iterations.
 
 ## Observability
 

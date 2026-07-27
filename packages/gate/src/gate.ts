@@ -1,10 +1,25 @@
-// A PR that adds/changes a DB migration is NEVER auto-merged — prod migrations are applied by a human
-// (surgical SQL), and auto-deploying code ahead of the schema would break prod. Err toward blocking — a
-// false positive just routes the PR to a human. `pathRe` is REQUIRED: it matches the repo's migration
-// directory. Example: a drizzle project whose migrations live under apps/api/drizzle/ (incl.
-// drizzle/pg-migrations/) would pass /(^|\/)drizzle\//i.
-export const detectMigration = (files: string[], pathRe: RegExp): boolean =>
-  files.some((f) => pathRe.test(f));
+/** Structural mirror of `@hamsterwheel/config`'s HumanRule — gate stays dependency-free. */
+export type HumanRule = { name: string; pathsRe?: RegExp; labels?: string[] };
+
+// Work matching a human-review rule is NEVER auto-merged — the canonical example is a DB migration
+// (applied to prod by a human; auto-deploying code ahead of the schema breaks prod), but rules also
+// cover label-marked domains (security, auth, payments) and sensitive paths. Err toward blocking — a
+// false positive just routes the PR to a human. A rule fires on ANY changed file matching `pathsRe`
+// OR ANY issue label matching `labels` (case-insensitive). Returns fired rule names in config order.
+export const matchHumanRules = (
+  rules: HumanRule[],
+  files: string[],
+  labels: string[],
+): string[] => {
+  const lower = labels.map((l) => l.toLowerCase());
+  return rules
+    .filter(
+      (rule) =>
+        (rule.pathsRe !== undefined && files.some((f) => rule.pathsRe!.test(f))) ||
+        (rule.labels ?? []).some((l) => lower.includes(l.toLowerCase())),
+    )
+    .map((rule) => rule.name);
+};
 
 // Scan an auto-review body for BLOCKING findings. Nits/low/medium don't block; high/critical do (the
 // loop won't merge over them — a human triages). Errs toward blocking (false positive = human looks).
@@ -44,21 +59,22 @@ export const reviewCoversHead = (commentAt: string | undefined, headAt: string):
 
 export type GateSignals = {
   ciGreen: boolean;
-  hasMigration: boolean;
+  /** Names of fired `[[human]]` rules (`matchHumanRules`). Any entry parks the PR for a human. */
+  humanRules: string[];
   /** False when no review comment postdates the head commit. Absence of findings is NOT approval. */
   reviewObserved: boolean;
   blockingReview: number;
   rubricPass: boolean;
 };
 export type GateAction = { action: "MERGE" } | { action: "BLOCK"; reason: string; detail: string };
-// Deterministic merge decision. Order: CI (fundamental) → migration (safety) → review (safety) → rubric.
+// Deterministic merge decision. Order: CI (fundamental) → human rules (safety) → review (safety) → rubric.
 export const mergeDecision = (s: GateSignals): GateAction => {
   if (!s.ciGreen) return { action: "BLOCK", reason: "ci-red", detail: "CI not green" };
-  if (s.hasMigration)
+  if (s.humanRules.length > 0)
     return {
       action: "BLOCK",
-      reason: "needs-prod-migration",
-      detail: "PR adds a DB migration — apply to prod manually, then merge",
+      reason: "needs-human",
+      detail: `matched human-review rule(s): ${s.humanRules.join(", ")} — a human reviews/applies, then merges`,
     };
   // Before trusting a clean review, require evidence one happened. Ordered ahead of the findings check
   // so a stale-but-clean comment can never stand in for a review of the code being merged.

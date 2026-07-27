@@ -54,7 +54,7 @@ const detectRepo = async (gh: Gh): Promise<string | null> =>
 const STATUS_OPTIONS = ["Draft", "Ready", "In Progress", "In Review", "Blocked", "Done"];
 const BLOCKED_OPTIONS = [
   "needs-criteria",
-  "needs-prod-migration",
+  "needs-human",
   "needs-decision",
   "dep-open",
   "ci-red",
@@ -94,12 +94,16 @@ const renderConfig = (v: {
   `# Written by \`hamster init\`. See hamsterwheel.example.toml for every option.
 repo = "${v.repo}"
 
-# Paths that mean "this PR changes a schema migration" → never auto-merged. EDIT THIS for your repo.
-migration_path_regex = "(^|/)(migrations|drizzle)/"
-
 base_branch = "${v.baseBranch}"
 branch_prefix = "loop"
 install_cmd = "bun install"
+
+# Human-review tripwires: work matching a rule is never auto-merged — the PR parks as
+# Blocked: needs-human. A rule fires on changed paths (regex) and/or issue labels.
+# EDIT the paths for your repo; add label rules for domains a human must see (security, payments…).
+[[human]]
+name = "prod-migration"
+paths = "(^|/)(migrations|drizzle)/"
 
 [project]
 number = ${v.projectNumber}
@@ -397,7 +401,7 @@ export const init = async (opts: InitOptions): Promise<{ code: number; report: I
   report.checks = await runChecks({ cwd: opts.cwd, gh });
   printChecks(report.checks, opts.log);
   opts.log(
-    `\nNext: edit \`migration_path_regex\` in ${CONFIG_FILENAME} for your repo, move an issue to Ready, then run \`hamster plan\`.`,
+    `\nNext: edit the \`[[human]]\` rules in ${CONFIG_FILENAME} for your repo, move an issue to Ready, then run \`hamster plan\`.`,
   );
   return { code: 0, report };
 };

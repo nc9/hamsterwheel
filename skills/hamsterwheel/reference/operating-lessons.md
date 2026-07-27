@@ -127,7 +127,7 @@ Schedule wave launches just after the quota reset so the whole window belongs to
 
 Do **not** restart the loop for that issue. The item is already In Review so a re-run skips it, and forcing it spawns a fresh implement session that redoes finished work or collides with the open branch.
 
-Finish the gate manually, in the loop's exact order: criteria vs diff → CI green → migration guard on changed files → review settled → merge → set the board Done yourself → worktree and branch cleanup, salvaging first if the tree is dirty.
+Finish the gate manually, in the loop's exact order: criteria vs diff → CI green → human-rule guard on changed files/labels → review settled → merge → set the board Done yourself → worktree and branch cleanup, salvaging first if the tree is dirty.
 
 ## Parallel waves
 

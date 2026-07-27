@@ -10,9 +10,11 @@ import { CONFIG_FILENAME, findConfig, loadConfig } from "./load.ts";
 const minimal = (over: Record<string, unknown> = {}) =>
   Bun.TOML.parse(`
 repo = "acme/backend"
-migration_path_regex = "(^|/)drizzle/"
 [project]
 number = 3
+[[human]]
+name = "prod-migration"
+paths = "(^|/)drizzle/"
 `) as Record<string, unknown> & typeof over;
 
 const withOver = (over: Record<string, unknown>) => ({ ...minimal(), ...over });
@@ -75,16 +77,26 @@ describe("parseConfig — defaults", () => {
 
 describe("parseConfig — required fields", () => {
   test("repo is required and must be a slug", () => {
-    expect(problems({ migration_path_regex: "x", project: { number: 1 } })).toContain(
+    expect(problems({ human: [{ name: "m", paths: "x" }], project: { number: 1 } })).toContain(
       "repo is required (string)",
     );
     expect(problems({ ...minimal(), repo: "backend" }).join()).toContain('"owner/name" slug');
   });
 
-  test("migration_path_regex is required — a missing one could auto-merge a schema change", () => {
+  test("a path-based [[human]] rule is required — without one a schema change could auto-merge", () => {
     const raw = minimal();
-    delete (raw as Record<string, unknown>).migration_path_regex;
-    expect(problems(raw).join()).toContain("migration_path_regex is required");
+    delete (raw as Record<string, unknown>).human;
+    expect(problems(raw).join()).toContain("at least one [[human]] rule with `paths` is required");
+    // Label-only rules do NOT satisfy the requirement — labels are optional human input.
+    expect(problems(withOver({ human: [{ name: "sec", labels: ["security"] }] })).join()).toContain(
+      "at least one [[human]] rule with `paths` is required",
+    );
+  });
+
+  test("the removed migration_path_regex key errors with the replacement syntax", () => {
+    const p = problems(withOver({ migration_path_regex: "(^|/)drizzle/" })).join();
+    expect(p).toContain("replaced by [[human]] rules");
+    expect(p).toContain('paths = "(^|/)(migrations|drizzle)/"');
   });
 
   test("a project reference is required", () => {
@@ -104,7 +116,7 @@ describe("parseConfig — value validation", () => {
   test("every problem is reported at once, not one per run", () => {
     const p = problems({
       repo: "not-a-slug",
-      migration_path_regex: "([unclosed",
+      human: [{ name: "m", paths: "([unclosed" }],
       branch_prefix: "-bad prefix",
       session_timeout_ms: 5,
       allowed_tools: ["ok", 42],
@@ -133,10 +145,47 @@ describe("parseConfig — value validation", () => {
     ).toEqual([]);
   });
 
-  test("regexes compile case-insensitively", () => {
-    const c = parseConfig(withOver({ migration_path_regex: "(^|/)DRIZZLE/" }), { home: "/h" });
-    expect(c.migrationPathRe.test("apps/api/drizzle/0001.sql")).toBe(true);
-    expect(c.migrationPathRe.test("apps/api/src/index.ts")).toBe(false);
+  test("rule path regexes compile case-insensitively", () => {
+    const c = parseConfig(withOver({ human: [{ name: "m", paths: "(^|/)DRIZZLE/" }] }), {
+      home: "/h",
+    });
+    expect(c.humanRules[0]!.pathsRe!.test("apps/api/drizzle/0001.sql")).toBe(true);
+    expect(c.humanRules[0]!.pathsRe!.test("apps/api/src/index.ts")).toBe(false);
+  });
+
+  test("[[human]] rules: labels + paths parse, and malformed rules name the exact problem", () => {
+    const c = parseConfig(
+      withOver({
+        human: [
+          { name: "prod-migration", paths: "(^|/)drizzle/" },
+          { name: "sensitive-domain", labels: ["security", " auth "] },
+        ],
+      }),
+      { home: "/h" },
+    );
+    expect(c.humanRules.map((h) => h.name)).toEqual(["prod-migration", "sensitive-domain"]);
+    expect(c.humanRules[1]!.labels).toEqual(["security", "auth"]);
+
+    expect(problems(withOver({ human: [{ name: "x" }] })).join()).toContain(
+      "needs paths and/or labels",
+    );
+    expect(problems(withOver({ human: [{ paths: "x" }] })).join()).toContain("human[0].name");
+    expect(
+      problems(
+        withOver({
+          human: [
+            { name: "dup", paths: "x" },
+            { name: "DUP", labels: ["a"] },
+          ],
+        }),
+      ).join(),
+    ).toContain('"DUP" is duplicated');
+    expect(
+      problems(withOver({ human: [{ name: "m", paths: "x", label: ["a"] }] })).join(),
+    ).toContain("human[0].label is not a known key");
+    expect(problems(withOver({ human: [{ name: "m", paths: "x", labels: [] }] })).join()).toContain(
+      "human[0].labels must be a non-empty array",
+    );
   });
 
   test("numeric limits enforce a floor rather than silently accepting nonsense", () => {

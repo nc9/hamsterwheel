@@ -1,15 +1,10 @@
 # hamsterwheel.toml — the loop's only repo-specific knowledge.
 # Copy to `hamsterwheel.toml` at your repo root (or let `hamsterwheel init` write it) and edit.
-# Every value below is shown with its default; only `repo`, `migration_path_regex` and a project
-# reference are required.
+# Every value below is shown with its default; only `repo`, a project reference and at least one
+# path-based [[human]] rule are required.
 
 # REQUIRED. The repo whose issues the loop works.
 repo = "acme/backend"
-
-# REQUIRED. Paths that mean "this PR changes a schema migration" → never auto-merged, parked as
-# Blocked: needs-prod-migration for a human. Case-insensitive. Err wide: a false positive just
-# routes a PR to a human, a false negative auto-deploys code ahead of the schema.
-migration_path_regex = "(^|/)(migrations|drizzle)/"
 
 base_branch = "main"
 branch_prefix = "loop" # branches are <prefix>/<issue>-<slug>
@@ -19,6 +14,26 @@ install_cmd = "bun install" # run in each fresh worktree before the implement se
 
 # Extra repos whose open issues `triage --sync` folds onto the board (e.g. a public triage inbox).
 source_repos = ["acme/backend"]
+
+# ---- human-review tripwires ------------------------------------------------------------------
+# Named rules that mean "this work is never auto-merged" → the PR parks as Blocked: needs-human
+# with the rule name(s) in the reason. A rule fires when the PR's changed files match `paths`
+# (case-insensitive regex) OR the issue carries one of `labels`. Err wide: a false positive just
+# routes a PR to a human, a false negative auto-merges something a human should have seen.
+# REQUIRED: at least one rule with `paths` (so a schema migration can never auto-merge by omission).
+# NOTE: [[human]] is a TOML array-of-tables — every `key = value` after it belongs to the rule, so
+# keep these blocks below any top-level keys.
+[[human]]
+name = "prod-migration"
+paths = "(^|/)(migrations|drizzle)/"
+
+# [[human]]
+# name = "sensitive-domain"
+# labels = ["security", "auth", "payments"]
+
+# [[human]]
+# name = "crypto-code"
+# paths = "(^|/)(security|crypto)/"
 
 # ---- control plane: GitHub Projects v2 -------------------------------------------------------
 [project]
@@ -43,7 +58,7 @@ done = "Done"
 
 [board.blocked_reasons]
 needs_criteria = "needs-criteria"
-needs_prod_migration = "needs-prod-migration"
+needs_human = "needs-human"
 needs_decision = "needs-decision"
 dep_open = "dep-open"
 ci_red = "ci-red"

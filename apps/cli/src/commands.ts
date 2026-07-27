@@ -1,5 +1,10 @@
 import type { Config } from "@hamsterwheel/config";
-import { type SessionPlan, formatSessionPlan, resolveSessionPolicy } from "@hamsterwheel/gate";
+import {
+  type SessionPlan,
+  formatSessionPlan,
+  matchHumanRules,
+  resolveSessionPolicy,
+} from "@hamsterwheel/gate";
 
 import { addItem, comment, fetchItemState, listItems, setBlocked, setStatus } from "./board.ts";
 import { buildQueue, enrichItem, isEpic, type LoopIssue, type QueueSkip } from "./issues.ts";
@@ -30,6 +35,9 @@ export type PlanReport = {
     size: number;
     implement: SessionPlan;
     review: SessionPlan;
+    /** `[[human]]` rules already fired by the issue's labels — the PR will park as needs-human.
+     * Path rules can only be evaluated at gate time, so this is a lower bound. */
+    humanRules: string[];
   }[];
   skipped: QueueSkip[];
   /** Issue number the loop would pick next, or null when the queue is empty. */
@@ -50,6 +58,7 @@ export const plan = async (deps: CommandDeps): Promise<PlanReport> => {
         size: i.size,
         implement: p.implement,
         review: p.review,
+        humanRules: matchHumanRules(cfg.humanRules, [], i.labels),
       };
     }),
     skipped,
@@ -62,7 +71,8 @@ export const renderPlan = (r: PlanReport, log: (m: string) => void): void => {
   r.eligible.forEach((i, n) => {
     log(
       `  ${n + 1}. #${i.number} [P${i.priority} sz${i.size}] ${i.title.slice(0, 56)}\n` +
-        `        implement ${formatSessionPlan(i.implement)} · review ${formatSessionPlan(i.review)}`,
+        `        implement ${formatSessionPlan(i.implement)} · review ${formatSessionPlan(i.review)}` +
+        (i.humanRules.length ? `\n        ⏸ will park for human (${i.humanRules.join(", ")})` : ""),
     );
   });
   if (!r.eligible.length) log("  (none)");

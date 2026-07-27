@@ -7,8 +7,8 @@ import {
   buildImplementPrompt,
   buildRubricPrompt,
   classifyImplement,
-  detectMigration,
   fence,
+  matchHumanRules,
   mergeDecision,
   parseRubricVerdict,
   preserveWorktreeChanges,
@@ -208,11 +208,35 @@ export const ciInfraBlocked = async (
   return null;
 };
 
-export const prTouchesMigration = async (gh: Gh, cfg: Config, prNum: number): Promise<boolean> => {
+/**
+ * Names of `[[human]]` rules fired by the PR's changed files and the issue's labels.
+ * Labels are re-fetched at gate time — the queue snapshot can be an hour old by now, and a label a
+ * human added mid-run must count. The snapshot is only the fallback when the fetch fails (err wide:
+ * stale labels beat no labels).
+ */
+export const firedHumanRules = async (
+  gh: Gh,
+  cfg: Config,
+  prNum: number,
+  issueNumber: number,
+  snapshotLabels: string[],
+): Promise<string[]> => {
   const files = (await gh.text(["pr", "diff", String(prNum), "-R", cfg.repo, "--name-only"]))
     .split("\n")
     .filter(Boolean);
-  return detectMigration(files, cfg.migrationPathRe);
+  const fresh = await gh.tryText([
+    "issue",
+    "view",
+    String(issueNumber),
+    "-R",
+    cfg.repo,
+    "--json",
+    "labels",
+    "-q",
+    ".labels[].name",
+  ]);
+  const labels = fresh !== null ? fresh.split("\n").filter(Boolean) : snapshotLabels;
+  return matchHumanRules(cfg.humanRules, files, labels);
 };
 
 /**
@@ -416,11 +440,11 @@ export const runMergeGate = async (
     const infra = await ciInfraBlocked(gh, cfg, prNum);
     if (infra) throw new RunFatalError(`CI could not run: ${infra}`);
   }
-  const hasMigration = await prTouchesMigration(gh, cfg, prNum);
+  let humanRules = await firedHumanRules(gh, cfg, prNum, iss.number, iss.labels);
   let review = await fetchBlockingReview(gh, cfg, prNum);
   let rounds = 0;
-  // A migration parks for a human regardless, so don't spend rounds fixing review findings on it.
-  if (review.blocking.length && !hasMigration) {
+  // A fired human rule parks for a human regardless, so don't spend rounds fixing review findings on it.
+  if (review.blocking.length && !humanRules.length) {
     const r = await runReviewRounds(deps, iss, prNum, worktree, review.blocking);
     rounds = r.rounds;
     if (r.rounds > 0) ci = r.ci;
@@ -428,6 +452,9 @@ export const runMergeGate = async (
     // produced `r.blocking` may now predate it. Reusing the pre-round `observed` would assert the new
     // head was reviewed on the strength of a review of the old one.
     review = { ...(await fetchBlockingReview(gh, cfg, prNum)), blocking: r.blocking };
+    // The fix rounds changed the diff — a fix commit can touch a human-rule path the original PR
+    // didn't. Re-evaluate against the final head, not the pre-round one.
+    if (r.rounds > 0) humanRules = await firedHumanRules(gh, cfg, prNum, iss.number, iss.labels);
   }
   if (!review.observed)
     log(
@@ -435,13 +462,13 @@ export const runMergeGate = async (
         "A review action that skips (e.g. on workflow-file changes) still reports its check green.",
     );
   let rubricPass = false;
-  if (ci.green && !hasMigration && review.observed && !review.blocking.length) {
-    log("  gate: CI green, no migration, review clean → running rubric…");
+  if (ci.green && !humanRules.length && review.observed && !review.blocking.length) {
+    log("  gate: CI green, no human rule fired, review clean → running rubric…");
     rubricPass = (await runRubric(deps, iss, prNum, worktree, ci)).pass;
   }
   const decision = mergeDecision({
     ciGreen: ci.green,
-    hasMigration,
+    humanRules,
     reviewObserved: review.observed,
     blockingReview: review.blocking.length,
     rubricPass,
@@ -451,7 +478,7 @@ export const runMergeGate = async (
     pr: prNum,
     ciGreen: ci.green,
     failing: ci.failing,
-    hasMigration,
+    humanRules,
     reviewObserved: review.observed,
     blockingReview: review.blocking.length,
     reviewRounds: rounds,
@@ -712,7 +739,7 @@ export const claimAndRun = async (
       gh,
       cfg.repo,
       iss.number,
-      `🐹 PR opened: ${outcome.url} — running the merge gate (CI · migration · review · rubric).`,
+      `🐹 PR opened: ${outcome.url} — running the merge gate (CI · human rules · review · rubric).`,
     );
     const decision = await runMergeGate(deps, iss, prNum, worktree);
     if (decision.action === "MERGE") {
@@ -741,12 +768,20 @@ export const claimAndRun = async (
         gh,
         cfg.repo,
         iss.number,
-        `🐹 **Merged** ${outcome.url} — CI green · no migration · review clean · rubric passed.`,
+        `🐹 **Merged** ${outcome.url} — CI green · no human rule fired · review clean · rubric passed.`,
       );
       log(`  ✓ #${iss.number} → Done (merged ${outcome.url})`);
       deps.runLog.append("merged", { issue: iss.number, pr: prNum });
     } else {
-      await setBlocked(gh, ctx, cfg, iss.itemId, decision.reason);
+      // The gate emits canonical reason slugs; the board's option names are configurable and may differ.
+      const optionName =
+        {
+          "ci-red": cfg.board.blockedReasons.ciRed,
+          "needs-human": cfg.board.blockedReasons.needsHuman,
+          "needs-decision": cfg.board.blockedReasons.needsDecision,
+          "rubric-fail": cfg.board.blockedReasons.rubricFail,
+        }[decision.reason] ?? decision.reason;
+      await setBlocked(gh, ctx, cfg, iss.itemId, optionName);
       await comment(
         gh,
         cfg.repo,

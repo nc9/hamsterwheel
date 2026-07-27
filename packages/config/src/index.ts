@@ -10,6 +10,7 @@ export {
   type RoleConfig,
   type StatusNames,
   type BlockedReasonNames,
+  type HumanRule,
   ConfigError,
   DEFAULT_ALLOWED_TOOLS,
   parseConfig,

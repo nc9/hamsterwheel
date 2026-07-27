@@ -111,12 +111,14 @@ Start a new repo on `--pr-only`. It runs the identical pipeline and stops at the
 The merge decision is a pure function over four booleans, evaluated in a fixed order:
 
 ```
-CI → migration → blocking review findings → rubric
+CI → human-review rules → blocking review findings → rubric
 ```
 
-No model is ever asked "should this merge?" Models grade the rubric, which is a judgement call over English. Reconciling that grade with CI, migrations and review findings is deterministic tested code.
+No model is ever asked "should this merge?" Models grade the rubric, which is a judgement call over English. Reconciling that grade with CI, human-review rules and review findings is deterministic tested code.
 
-Never auto-merged regardless of how green things look: anything touching a migration path (parked as `needs-prod-migration`), and anything carrying a high or critical review finding. Nits don't block.
+Never auto-merged regardless of how green things look: anything matching a `[[human]]` rule in `hamsterwheel.toml` (parked as `needs-human`, with the fired rule names in the reason), and anything carrying a high or critical review finding. Nits don't block.
+
+A `[[human]]` rule has a `name` and fires on changed **paths** (case-insensitive regex against the PR's files) and/or issue **labels** (case-insensitive exact match) — either hit parks the PR. At least one path-based rule is required, so a schema migration can never auto-merge by omission; the canonical config is a `prod-migration` rule on `(^|/)(migrations|drizzle)/`, with optional extras like a `labels = ["security", "auth", "payments"]` rule. Label-triggered rules are known at selection time, so `plan` prints "will park for human (<rule>)" against the affected issues before anything runs.
 
 **`blockingReview` is the arm most likely to be silently broken in your repo.** It greps your review bot's comment for severity markers. If your review workflow asks for freeform prose, no finding ever carries a marker, `blockingReview` is always 0, and the gate reads every review — including one flagging real problems — as approval. Verify it empirically before trusting it; `reference/adoption-checklist.md` has the exact test.
 

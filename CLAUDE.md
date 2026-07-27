@@ -33,8 +33,8 @@ Extracted from a production loop that ran overnight autonomous implementation wa
 
 ### The merge gate
 
-- Deterministic gate order: CI → migration → blocking review findings → rubric. Every heuristic errs toward blocking — a false positive routes to a human, a false negative merges a bad PR.
-- Schema migrations NEVER auto-merge. Releases are never cut unattended.
+- Deterministic gate order: CI → human-review rules → blocking review findings → rubric. Every heuristic errs toward blocking — a false positive routes to a human, a false negative merges a bad PR.
+- Work matching a `[[human]]` rule (changed paths and/or issue labels) NEVER auto-merges — parked as `needs-human` naming the fired rule(s). A path-based rule is required so schema migrations can't auto-merge by omission. Releases are never cut unattended.
 - The rubric grader is a fresh adversarial session with READ-ONLY tools that did not write the code, grading each acceptance criterion against the RESULTING codebase, not just the diff — a criterion may be satisfied by code already on main.
 - Execution-dependent criteria ("tests pass", "typecheck clean") are OWNED by the deterministic CI gate; a read-only grader physically can't run them and will false-fail correct PRs. Credit them in code once CI is green (`applyCiToRubric`) — prompt instructions alone don't bind an LLM.
 - Parse LLM JSON verdicts by scanning back from the last `}` with brace matching; models wrap JSON in prose.
@@ -78,7 +78,7 @@ Extracted from a production loop that ran overnight autonomous implementation wa
 
 - Headless agent sessions can share the operator's subscription session quota (no separate API key → same limit as interactive use). ~10 big-model implement sessions per wave was the practical ceiling; schedule wave launches just after the quota reset so the window belongs to the loop, and priority-order the queue so the important work lands before the quota dies.
 - Quota exhaustion has a signature: a rapid burst of instant session failures (~1/min, tiny transcripts) — nothing like a real failure (one issue, huge transcript). On a "no PR url" failure, read the captured session stdout FIRST; if it's the session-limit message, the fix is re-queue + relaunch after reset, not debugging the issue.
-- Driver killed mid-gate with a PR already open: do NOT restart the loop for that issue — re-running skips In Review items, and forcing it spawns a fresh implement session that redoes finished work or collides with the open branch. Finish the gate BY HAND in the loop's exact order: criteria vs diff → CI green → migration guard on changed files → review settled → merge → set the board Done yourself → worktree/branch cleanup (salvage first if dirty).
+- Driver killed mid-gate with a PR already open: do NOT restart the loop for that issue — re-running skips In Review items, and forcing it spawns a fresh implement session that redoes finished work or collides with the open branch. Finish the gate BY HAND in the loop's exact order: criteria vs diff → CI green → human-rule guard on changed files/labels → review settled → merge → set the board Done yourself → worktree/branch cleanup (salvage first if dirty).
 
 ### Model policy
 

@@ -9,7 +9,7 @@ import {
   applyCiToRubric,
   classifyImplement,
   classifyWipBranch,
-  detectMigration,
+  matchHumanRules,
   isExecutionDependent,
   mergeDecision,
   parseRubricVerdict,
@@ -75,23 +75,42 @@ describe("screenInjection", () => {
   });
 });
 
-describe("detectMigration", () => {
-  // Example migration-path regex for a drizzle project (migrations under apps/api/drizzle/, incl.
-  // drizzle/pg-migrations/). The path pattern is now a REQUIRED, repo-supplied parameter.
-  const MIGRATION_RE = /(^|\/)drizzle\//i;
-  test("drizzle migration", () =>
-    expect(detectMigration(["apps/api/drizzle/0032_x.sql"], MIGRATION_RE)).toBe(true));
+describe("matchHumanRules", () => {
+  // The canonical rule: a drizzle project's migration path (incl. drizzle/pg-migrations/). Path
+  // patterns are repo-supplied; at least one path rule is required by config validation.
+  const MIGRATION = { name: "prod-migration", pathsRe: /(^|\/)drizzle\//i };
+  const SENSITIVE = { name: "sensitive-domain", labels: ["security", "auth"] };
+  const RULES = [MIGRATION, SENSITIVE];
+  test("drizzle migration fires by path", () =>
+    expect(matchHumanRules(RULES, ["apps/api/drizzle/0032_x.sql"], [])).toEqual([
+      "prod-migration",
+    ]));
   test("pg-migrations dir", () =>
-    expect(detectMigration(["apps/api/drizzle/pg-migrations/0032.sql"], MIGRATION_RE)).toBe(true));
-  test("normal files", () =>
-    expect(detectMigration(["apps/api/src/routes/v1/auth.ts", "scripts/x.ts"], MIGRATION_RE)).toBe(
-      false,
+    expect(matchHumanRules(RULES, ["apps/api/drizzle/pg-migrations/0032.sql"], [])).toEqual([
+      "prod-migration",
+    ]));
+  test("normal files, no labels → nothing fires", () =>
+    expect(matchHumanRules(RULES, ["apps/api/src/routes/v1/auth.ts", "scripts/x.ts"], [])).toEqual(
+      [],
     ));
-  test("empty", () => expect(detectMigration([], MIGRATION_RE)).toBe(false));
+  test("empty", () => expect(matchHumanRules(RULES, [], [])).toEqual([]));
+  test("issue labels fire label rules, case-insensitively", () => {
+    expect(matchHumanRules(RULES, ["src/index.ts"], ["Security", "P1"])).toEqual([
+      "sensitive-domain",
+    ]);
+    expect(matchHumanRules(RULES, ["src/index.ts"], ["P1"])).toEqual([]);
+  });
+  test("multiple rules fire in config order", () =>
+    expect(matchHumanRules(RULES, ["apps/api/drizzle/0032_x.sql"], ["auth"])).toEqual([
+      "prod-migration",
+      "sensitive-domain",
+    ]));
   test("honors a different repo's migration path regex", () => {
-    const railsRe = /(^|\/)db\/migrate\//i; // a Rails project's migrations live elsewhere
-    expect(detectMigration(["db/migrate/20260101_add_users.rb"], railsRe)).toBe(true);
-    expect(detectMigration(["apps/api/drizzle/0032_x.sql"], railsRe)).toBe(false);
+    const rails = [{ name: "rails-migration", pathsRe: /(^|\/)db\/migrate\//i }];
+    expect(matchHumanRules(rails, ["db/migrate/20260101_add_users.rb"], [])).toEqual([
+      "rails-migration",
+    ]);
+    expect(matchHumanRules(rails, ["apps/api/drizzle/0032_x.sql"], [])).toEqual([]);
   });
 });
 
@@ -484,7 +503,7 @@ describe("mergeDecision", () => {
 
   const base = {
     ciGreen: true,
-    hasMigration: false,
+    humanRules: [] as string[],
     reviewObserved: true,
     blockingReview: 0,
     rubricPass: true,
@@ -498,22 +517,25 @@ describe("mergeDecision", () => {
     expect(d).toMatchObject({ action: "BLOCK", reason: "needs-decision" });
     if (d.action === "BLOCK") expect(d.detail).toContain("silence is not approval");
   });
-  test("migration still outranks a missing review", () => {
-    const d = mergeDecision({ ...base, reviewObserved: false, hasMigration: true });
-    expect(d).toMatchObject({ action: "BLOCK", reason: "needs-prod-migration" });
+  test("a human rule still outranks a missing review", () => {
+    const d = mergeDecision({ ...base, reviewObserved: false, humanRules: ["prod-migration"] });
+    expect(d).toMatchObject({ action: "BLOCK", reason: "needs-human" });
   });
   test("a missing review blocks before the rubric is consulted", () => {
     const d = mergeDecision({ ...base, reviewObserved: false, rubricPass: false });
     expect(d).toMatchObject({ action: "BLOCK", reason: "needs-decision" });
   });
   test("ci red blocks first", () => {
-    const d = mergeDecision({ ...base, ciGreen: false, hasMigration: true });
+    const d = mergeDecision({ ...base, ciGreen: false, humanRules: ["prod-migration"] });
     expect(d).toMatchObject({ action: "BLOCK", reason: "ci-red" });
   });
-  test("migration blocks (with detail)", () => {
-    const d = mergeDecision({ ...base, hasMigration: true });
-    expect(d).toMatchObject({ action: "BLOCK", reason: "needs-prod-migration" });
-    if (d.action === "BLOCK") expect(d.detail).toMatch(/migration/i);
+  test("a fired human rule blocks, naming every rule in the detail", () => {
+    const d = mergeDecision({ ...base, humanRules: ["prod-migration", "sensitive-domain"] });
+    expect(d).toMatchObject({ action: "BLOCK", reason: "needs-human" });
+    if (d.action === "BLOCK") {
+      expect(d.detail).toContain("prod-migration");
+      expect(d.detail).toContain("sensitive-domain");
+    }
   });
   test("blocking review blocks (detail counts findings)", () => {
     const d = mergeDecision({ ...base, blockingReview: 2 });

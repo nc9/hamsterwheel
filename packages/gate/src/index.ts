@@ -2,16 +2,17 @@
  * @hamsterwheel/gate
  *
  * Pure, heavily-tested merge-gate policy (plus a couple of impure git salvage helpers). Deterministic
- * gate order: CI → migration → blocking review findings → rubric; every heuristic errs toward blocking
- * (a false positive routes to a human, a false negative merges a bad PR).
+ * gate order: CI → human-review rules → blocking review findings → rubric; every heuristic errs toward
+ * blocking (a false positive routes to a human, a false negative merges a bad PR).
  */
 export { INJECTION_MARKERS, screenInjection, fence } from "./untrusted.ts";
 export {
   type GateSignals,
   type GateAction,
+  type HumanRule,
   BLOCKING_REVIEW_RE,
   mergeDecision,
-  detectMigration,
+  matchHumanRules,
   reviewBlockingFindings,
   reviewCoversHead,
 } from "./gate.ts";

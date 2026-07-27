@@ -141,3 +141,18 @@ describe("runFatalReason", () => {
     expect(isRunFatal(undefined)).toBe(false);
   });
 });
+
+// CI that never ran must not read as CI that failed. An exhausted Actions budget fails jobs at
+// scheduling with zero steps in ~1s, which the rollup reports identically to a real red.
+describe("ci-infrastructure is run-fatal", () => {
+  test("a budget-blocked CI message classifies as run-fatal", () => {
+    const e = new Error(
+      "CI could not run: The job was not started because an Actions budget is preventing further use.",
+    );
+    expect(runFatalReason(e)).toContain("ci-infrastructure");
+  });
+  test("an ordinary red is still issue-fatal", () => {
+    expect(runFatalReason(new Error("CI not green: Test - API failed"))).toBeNull();
+    expect(runFatalReason(new Error("2 tests failed in apps/api"))).toBeNull();
+  });
+});

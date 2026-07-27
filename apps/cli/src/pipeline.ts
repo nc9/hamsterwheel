@@ -154,6 +154,59 @@ export const waitForChecks = async (
   }
 };
 
+/**
+ * Messages GitHub attaches to a check that was never allowed to run. These are about the ACCOUNT, not
+ * the PR, so they will recur identically for every issue in the queue — run-fatal, not ci-red.
+ * Observed: an exhausted Actions spending limit failed jobs at scheduling with zero steps in ~1s, which
+ * at the `statusCheckRollup` level is indistinguishable from a test suite that genuinely failed.
+ */
+const CI_INFRA_RE =
+  /Actions budget|spending limit|not started because|billing|payment|quota (?:exceeded|reached)|disabled for this repository/i;
+
+/**
+ * When CI is red, is it red because it never ran? Returns the operator-facing reason, or null when the
+ * failure looks like an ordinary one. Only called on red, so the two extra API calls are not on the
+ * happy path.
+ *
+ * Failing to determine this returns null (→ treat as a normal red). That is the safe direction: a
+ * missed detection blocks one issue for a human to look at, while a false positive would abort a
+ * perfectly good run.
+ */
+export const ciInfraBlocked = async (
+  gh: Gh,
+  cfg: Config,
+  prNum: number,
+): Promise<string | null> => {
+  const sha = (
+    await gh.tryText([
+      "pr",
+      "view",
+      String(prNum),
+      "-R",
+      cfg.repo,
+      "--json",
+      "headRefOid",
+      "--jq",
+      ".headRefOid",
+    ])
+  )?.trim();
+  if (!sha) return null;
+  const runs = await gh.tryJson<{ check_runs?: { id: number; conclusion?: string }[] }>([
+    "api",
+    `repos/${cfg.repo}/commits/${sha}/check-runs?per_page=100`,
+  ]);
+  for (const cr of runs?.check_runs ?? []) {
+    if (cr.conclusion !== "failure") continue;
+    const ann = await gh.tryJson<{ message?: string }[]>([
+      "api",
+      `repos/${cfg.repo}/check-runs/${cr.id}/annotations`,
+    ]);
+    const hit = (ann ?? []).find((a) => CI_INFRA_RE.test(a.message ?? ""));
+    if (hit?.message) return hit.message.trim();
+  }
+  return null;
+};
+
 export const prTouchesMigration = async (gh: Gh, cfg: Config, prNum: number): Promise<boolean> => {
   const files = (await gh.text(["pr", "diff", String(prNum), "-R", cfg.repo, "--name-only"]))
     .split("\n")
@@ -358,6 +411,13 @@ export const runMergeGate = async (
   const { cfg, gh, log } = deps;
   log(`  gate #${iss.number} PR #${prNum}: waiting for CI…`);
   let ci = await waitForChecks(gh, cfg, prNum);
+  // Red because the tests failed, or red because GitHub refused to run them? The second is about the
+  // account and recurs for every issue, so it must abort the run rather than park this PR as ci-red and
+  // move on to do the same to the rest of the queue.
+  if (!ci.green) {
+    const infra = await ciInfraBlocked(gh, cfg, prNum);
+    if (infra) throw new RunFatalError(`CI could not run: ${infra}`);
+  }
   const hasMigration = await prTouchesMigration(gh, cfg, prNum);
   let review = await fetchBlockingReview(gh, cfg, prNum);
   let rounds = 0;

@@ -498,9 +498,9 @@ export const runImplement = async (
     throw new Error(`refusing to run: injection markers (${iss.injection.join(", ")})`);
 
   // Salvage-first prepare, branch off the fresh base, upstream dropped (direct-to-main safety),
-  // .worktreeinclude files copied, incremental install. The sandbox path installs in-container
-  // instead (Linux-native modules over the mounted worktree; the image entrypoint hardcodes
-  // `bun install` there — config's install_cmd applies to the host path only).
+  // .worktreeinclude files copied, scripts.setup run (incremental on a warm lane). The sandbox path
+  // installs in-container instead (Linux-native modules over the mounted worktree; the image
+  // entrypoint hardcodes `bun install` there — scripts.setup applies to the host path only).
   const { dir: worktree } = await acquireLane({
     cfg,
     lane,
@@ -510,7 +510,7 @@ export const runImplement = async (
     // The repo TOPLEVEL, not cwd: the driver may run from a subdirectory (config resolves upward),
     // and .worktreeinclude + its root-relative patterns live at the root.
     repoRoot: (await gitToplevel()) ?? process.cwd(),
-    skipInstall: Boolean(deps.sandbox),
+    skipSetup: Boolean(deps.sandbox),
     log,
   });
 

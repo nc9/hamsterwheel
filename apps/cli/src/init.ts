@@ -88,19 +88,87 @@ export const RANK_LABELS = [
   "size: XL",
 ];
 
+/** What runs in a lane after acquire — detected once at init, explicit config forever after. */
+export type SetupDetection = { cmd: string; source: string };
+
+// scripts.setup is argv-exec'd without a shell; a command using shell syntax would fail at runtime
+// with a confusing error, so detection skips those candidates (the operator points at a script).
+// Control chars are out too — the command is interpolated into a TOML basic string verbatim.
+// eslint-disable-next-line no-control-regex
+const SHELL_META_RE = /[|&;<>$`(){}*?[\]'"\\\x00-\x1f]/;
+
+/**
+ * Best-effort detection of the repo's existing setup convention, checked in order of specificity:
+ * other agent tools' configs (Conductor, Cursor cloud) → a conventional setup script → the lockfile's
+ * package manager. Init-time only — the runtime never falls back to another tool's config silently.
+ */
+export const detectSetupCommand = async (cwd: string): Promise<SetupDetection | null> => {
+  const read = (rel: string): Promise<string | null> =>
+    readFile(join(cwd, rel), "utf8").catch(() => null);
+  const fromJson = async (rel: string, pick: (doc: unknown) => unknown): Promise<string | null> => {
+    const raw = await read(rel);
+    if (raw === null) return null;
+    try {
+      const v = pick(JSON.parse(raw));
+      return typeof v === "string" && v.trim() && !SHELL_META_RE.test(v) ? v.trim() : null;
+    } catch {
+      return null;
+    }
+  };
+
+  const conductor = await fromJson(
+    "conductor.json",
+    (d) => (d as { scripts?: { setup?: unknown } })?.scripts?.setup,
+  );
+  if (conductor) return { cmd: conductor, source: "conductor.json scripts.setup" };
+  const cursor = await fromJson(
+    ".cursor/environment.json",
+    (d) => (d as { install?: unknown })?.install,
+  );
+  if (cursor) return { cmd: cursor, source: ".cursor/environment.json install" };
+
+  // Run via an interpreter, never `./` — a conventional script that isn't chmod +x would detect
+  // fine and then fail on every acquire.
+  for (const s of ["scripts/setup.sh", "script/setup", "scripts/setup.ts"])
+    if ((await read(s)) !== null)
+      return { cmd: s.endsWith(".ts") ? `bun ${s}` : `sh ${s}`, source: s };
+
+  const locks: [string, string][] = [
+    ["bun.lock", "bun install"],
+    ["bun.lockb", "bun install"],
+    ["pnpm-lock.yaml", "pnpm install"],
+    ["yarn.lock", "yarn install"],
+    ["package-lock.json", "npm install"],
+    ["uv.lock", "uv sync"],
+  ];
+  for (const [f, cmd] of locks) if ((await read(f)) !== null) return { cmd, source: f };
+  return null;
+};
+
 const renderConfig = (v: {
   repo: string;
   projectNumber: number;
   projectTitle: string;
   baseBranch: string;
+  setup: SetupDetection | null;
 }): string =>
   `# Written by \`hamster init\`. See hamsterwheel.example.toml for every option.
 repo = "${v.repo}"
 
 base_branch = "${v.baseBranch}"
 branch_prefix = "loop"
-install_cmd = "bun install"
 worktree_lanes = 1 # persistent worktree pool size (>1 reserved for parallel wave mode)
+max_review_rounds = 4
+
+# Runs in the lane after every acquire (cold AND warm) — argv-exec'd, NO shell, so anything
+# compound belongs in a repo script. Env: HAMSTER_WORKSPACE_PATH, HAMSTER_WORKSPACE_NAME,
+# HAMSTER_ROOT_PATH, HAMSTER_LANE_COLD, HAMSTER_ISSUE, HAMSTER_RUN_ID.
+[scripts]
+${
+  v.setup
+    ? `setup = "${v.setup.cmd}" # detected from ${v.setup.source}`
+    : `# setup = "./scripts/setup.sh" # nothing detected — point at your install/bootstrap script`
+}
 
 # Human-review tripwires: work matching a rule is never auto-merged — the PR parks as
 # Blocked: needs-human. A rule fires on changed paths (regex) and/or issue labels.
@@ -112,8 +180,6 @@ paths = "(^|/)(migrations|drizzle)/"
 [project]
 number = ${v.projectNumber}
 title = "${v.projectTitle}"
-
-max_review_rounds = 4
 
 [runners.implement]
 runner = "claude"
@@ -404,11 +470,18 @@ export const init = async (opts: InitOptions): Promise<{ code: number; report: I
         ".defaultBranchRef.name",
       ])
     )?.trim() || "main";
+  const setup = await detectSetupCommand(opts.cwd);
+  opts.log(
+    setup
+      ? `\nSetup script: "${setup.cmd}" (detected from ${setup.source})`
+      : `\nSetup script: none detected — set [scripts] setup in ${CONFIG_FILENAME} if lanes need an install step`,
+  );
   const rendered = renderConfig({
     repo,
     projectNumber: project?.number ?? 1,
     projectTitle: title,
     baseBranch,
+    setup,
   });
   opts.log(`\nConfig:`);
   const current = await readFile(configPath, "utf8").catch(() => null);

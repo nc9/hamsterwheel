@@ -199,6 +199,35 @@ describe("parseConfig — value validation", () => {
     expect(parseConfig(withOver({ worktree_lanes: 5 }), { home: "/h" }).worktreeLanes).toBe(5);
   });
 
+  test("[scripts]: setup parses, absence means no setup step", () => {
+    expect(parseConfig(minimal(), { home: "/h" }).scripts).toEqual({});
+    expect(
+      parseConfig(withOver({ scripts: { setup: " ./scripts/setup.sh " } }), { home: "/h" }).scripts
+        .setup,
+    ).toBe("./scripts/setup.sh");
+  });
+
+  test("[scripts]: unknown keys are errors, not silent no-ops (a typo must not skip setup)", () => {
+    expect(problems(withOver({ scripts: { setup: "x", steup: "y" } })).join()).toContain(
+      "scripts.steup is not supported",
+    );
+    expect(problems(withOver({ scripts: { run: "bun dev" } })).join()).toContain(
+      "scripts.run is not supported",
+    );
+    expect(problems(withOver({ scripts: "bun install" })).join()).toContain(
+      "scripts must be a table",
+    );
+    expect(problems(withOver({ scripts: { setup: "" } })).join()).toContain(
+      "scripts.setup must be a non-empty string",
+    );
+  });
+
+  test("the removed install_cmd key is a hard error pointing at [scripts]", () => {
+    const p = problems(withOver({ install_cmd: "bun install" })).join();
+    expect(p).toContain("install_cmd was replaced by the [scripts] table");
+    expect(p).toContain('setup = "bun install"');
+  });
+
   test("a non-table document is rejected outright", () => {
     expect(problems("repo = 1")).toEqual([
       "config must be a TOML table (got a non-object document)",

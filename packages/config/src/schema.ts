@@ -66,7 +66,12 @@ export type Config = {
   /** `[[human]]` rules — any hit parks the PR as Blocked: needs-human instead of auto-merging. */
   humanRules: HumanRule[];
   criteriaHeading: string;
-  installCmd: string;
+  /**
+   * `[scripts]` lifecycle table (Conductor-style). `setup` runs in the lane after every acquire —
+   * cold create AND warm reuse — with `HAMSTER_*` context env vars. Absent → no setup step.
+   * `run` / `archive` / `maintenance` are reserved for later.
+   */
+  scripts: { setup?: string };
   smokeCmd?: string;
   runners: { implement: RoleConfig; review: RoleConfig };
   allowedTools: string[];
@@ -242,6 +247,23 @@ const readRole = (
   };
 };
 
+/** Parse the `[scripts]` lifecycle table. Only `setup` exists today; unknown keys are errors so a
+ * typo (or a future key on an old version) never silently no-ops. */
+const readScripts = (r: Reader, raw: unknown): { setup?: string } => {
+  if (raw === undefined) return {};
+  if (!isBag(raw)) {
+    r.fail("scripts must be a table ([scripts])");
+    return {};
+  }
+  for (const k of Object.keys(raw))
+    if (k !== "setup")
+      r.fail(
+        `scripts.${k} is not supported — only \`setup\` is (run/archive/maintenance are reserved for later)`,
+      );
+  const setup = r.optStr("scripts.setup");
+  return setup ? { setup } : {};
+};
+
 /** Parse the `[[human]]` array of tables. Every problem is recorded on the reader, none thrown. */
 const readHumanRules = (r: Reader, raw: unknown): HumanRule[] => {
   if (raw === undefined) return [];
@@ -367,7 +389,7 @@ export const parseConfig = (raw: unknown, opts: { home?: string } = {}): Config 
     },
     humanRules: readHumanRules(r, raw.human),
     criteriaHeading: r.str("criteria_heading", "Acceptance Criteria"),
-    installCmd: r.str("install_cmd", "bun install"),
+    scripts: readScripts(r, raw.scripts),
     smokeCmd: r.optStr("smoke_cmd"),
     runners: {
       implement: readRole(r, "runners.implement", { runner: "claude" }),
@@ -387,6 +409,10 @@ export const parseConfig = (raw: unknown, opts: { home?: string } = {}): Config 
   };
   // Hard break from the pre-[[human]] config surface: silently ignoring the old key would drop the
   // migration guard without a sound.
+  if (raw.install_cmd !== undefined)
+    r.fail(
+      'install_cmd was replaced by the [scripts] table — e.g.\n      [scripts]\n      setup = "bun install"   # or "./scripts/setup.sh"; runs in the lane on every acquire, argv-exec\'d (no shell)',
+    );
   if (raw.migration_path_regex !== undefined)
     r.fail(
       'migration_path_regex was replaced by [[human]] rules — e.g.\n      [[human]]\n      name = "prod-migration"\n      paths = "(^|/)(migrations|drizzle)/"',

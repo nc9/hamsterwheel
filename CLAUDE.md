@@ -41,7 +41,7 @@ Extracted from a production loop that ran overnight autonomous implementation wa
 
 ### Run-fatal vs issue-fatal
 
-- A failure about THIS issue blocks THIS issue. A precondition that would fail identically for every item (sandbox credentials, docker, a runner binary, gh auth, a missing board field, a broken install command) is RUN-FATAL: abort the run, release the claim back to Ready, touch nothing else. `run --execute --sandbox` without the token once failed closed _per issue_ and burned an entire curated Ready queue into Blocked in under a minute — the fail-closed was right, the per-issue blame was not. Check every such precondition once in a preflight so the run refuses to start.
+- A failure about THIS issue blocks THIS issue. A precondition that would fail identically for every item (sandbox credentials, docker, a runner binary, gh auth, a missing board field, a broken setup script) is RUN-FATAL: abort the run, release the claim back to Ready, touch nothing else. `run --execute --sandbox` without the token once failed closed _per issue_ and burned an entire curated Ready queue into Blocked in under a minute — the fail-closed was right, the per-issue blame was not. Check every such precondition once in a preflight so the run refuses to start.
 - Unattended sessions need approval bypass at EVERY layer. A harness tool allow-list does not cover a runner's own consent model: codex needs `approval_policy="never"` + an explicit `--sandbox` mode, opencode needs `--auto`. Bake them into the argv, never into a README instruction.
 
 ### Session outcomes

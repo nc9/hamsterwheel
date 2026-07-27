@@ -12,7 +12,7 @@ Verify against the remote, not the working tree:
 git show origin/main:package.json | grep loop:install
 ```
 
-Observed: a first run claimed an issue, built the worktree, and died on `install_cmd "bun run loop:install" failed: Script not found`, because the script existed only on the unpushed config branch.
+Observed: a first run claimed an issue, built the worktree, and died on `scripts.setup "bun run loop:install" failed: Script not found`, because the script existed only on the unpushed config branch.
 
 ## 2. Prove the blocking-review arm actually fires — **SILENT, and it defeats the gate**
 
@@ -85,9 +85,9 @@ Include the review workflow if it reports as a check — the gate waits on the w
 
 One sampling trap: a run list filtered only by workflow name can include runs where path filters skipped the real matrix, making CI look faster than it is. Sanity check against a run you know exercised everything.
 
-## 6. Know what `install_cmd` can't do
+## 6. Know what `[scripts]` `setup` can't do
 
-It is argv-split and **not** run through a shell. `a && b`, pipes, globs and `$VAR` do not work. Anything compound ships as a script in the repo (`bun run loop:install`) — which also means item 1 applies to it.
+It is argv-split and **not** run through a shell. `a && b`, pipes, globs and `$VAR` do not work. Anything compound ships as a script in the repo (`./scripts/setup.sh`) — which also means item 1 applies to it. The script does get `HAMSTER_*` context env vars (`HAMSTER_LANE_COLD`, `HAMSTER_WORKSPACE_PATH`, …), so cold/warm branching lives inside the script, not the config.
 
 ## 7. Bake unattended consent into the argv
 

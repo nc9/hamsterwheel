@@ -2,6 +2,8 @@
 # Copy to `hamsterwheel.toml` at your repo root (or let `hamsterwheel init` write it) and edit.
 # Every value below is shown with its default; only `repo`, a project reference and at least one
 # path-based [[human]] rule are required.
+# NOTE: TOML tables ([scripts], [[human]], [project]…) claim every `key = value` after their header,
+# so ALL top-level keys stay in this first section.
 
 # REQUIRED. The repo whose issues the loop works.
 repo = "acme/backend"
@@ -9,11 +11,48 @@ repo = "acme/backend"
 base_branch = "main"
 branch_prefix = "loop" # branches are <prefix>/<issue>-<slug>
 criteria_heading = "Acceptance Criteria"
-install_cmd = "bun install" # run in each fresh worktree before the implement session
 # smoke_cmd = "bun run smoke"   # optional post-merge check; failures notify, never auto-rollback
 
 # Extra repos whose open issues `triage --sync` folds onto the board (e.g. a public triage inbox).
 source_repos = ["acme/backend"]
+
+session_timeout_ms = 3600000 # kill a stalled implement session after 60m
+ci_timeout_ms = 900000 # give up waiting for checks after 15m (→ Blocked: ci-red)
+max_diff_bytes = 60000 # diff slice handed to the rubric grader
+max_iterations = 50 # `run` backstop: never loop forever
+max_review_rounds = 4 # cap on stateless review-fix rounds; they never converge unbounded
+# worktree_root = "~/.hamsterwheel/worktrees"
+
+# Sessions run in persistent worktree "lanes" (lane-0…lane-N-1) reused across issues — node_modules
+# and caches stay warm; each acquire salvages leftovers, resets, re-branches off the fresh base and
+# re-copies .worktreeinclude files. >1 is reserved for parallel wave mode (accepted, currently inert).
+worktree_lanes = 1
+
+# Scoped tool allow-list for a claude implement session. No blanket Bash(*) and no arbitrary-read
+# shells. This is defense-in-depth, NOT isolation — the sandbox is the boundary.
+allowed_tools = [
+  "Edit",
+  "Read",
+  "Write",
+  "Glob",
+  "Grep",
+  "TodoWrite",
+  "Bash(git:*)",
+  "Bash(gh:*)",
+  "Bash(bun:*)",
+]
+
+# ---- lifecycle scripts -----------------------------------------------------------------------
+# `setup` runs in the lane after EVERY acquire (cold create and warm reuse) before the session.
+# It is argv-exec'd without a shell — no pipes/&&/globs; anything compound belongs in a repo script
+# (which is also what Conductor/Cursor/Codex-style setups converge on). Env vars provided:
+#   HAMSTER_WORKSPACE_PATH  lane directory        HAMSTER_WORKSPACE_NAME  "lane-0"
+#   HAMSTER_ROOT_PATH       primary checkout      HAMSTER_LANE_COLD       "1" fresh / "0" warm
+#   HAMSTER_ISSUE           issue number          HAMSTER_RUN_ID          run id
+# Absent → no setup step. `run` / `archive` / `maintenance` are reserved for later.
+[scripts]
+setup = "bun install"
+# setup = "./scripts/setup.sh"
 
 # ---- human-review tripwires ------------------------------------------------------------------
 # Named rules that mean "this work is never auto-merged" → the PR parks as Blocked: needs-human
@@ -21,8 +60,6 @@ source_repos = ["acme/backend"]
 # (case-insensitive regex) OR the issue carries one of `labels`. Err wide: a false positive just
 # routes a PR to a human, a false negative auto-merges something a human should have seen.
 # REQUIRED: at least one rule with `paths` (so a schema migration can never auto-merge by omission).
-# NOTE: [[human]] is a TOML array-of-tables — every `key = value` after it belongs to the rule, so
-# keep these blocks below any top-level keys.
 [[human]]
 name = "prod-migration"
 paths = "(^|/)(migrations|drizzle)/"
@@ -86,29 +123,3 @@ runner = "claude"
 strong_model = "opus"
 cheap_model = "sonnet"
 effort = "high"
-
-# ---- session limits --------------------------------------------------------------------------
-# Scoped tool allow-list for a claude implement session. No blanket Bash(*) and no arbitrary-read
-# shells. This is defense-in-depth, NOT isolation — the sandbox is the boundary.
-allowed_tools = [
-  "Edit",
-  "Read",
-  "Write",
-  "Glob",
-  "Grep",
-  "TodoWrite",
-  "Bash(git:*)",
-  "Bash(gh:*)",
-  "Bash(bun:*)",
-]
-
-session_timeout_ms = 3600000 # kill a stalled implement session after 60m
-ci_timeout_ms = 900000 # give up waiting for checks after 15m (→ Blocked: ci-red)
-max_diff_bytes = 60000 # diff slice handed to the rubric grader
-max_iterations = 50 # `run` backstop: never loop forever
-# worktree_root = "~/.hamsterwheel/worktrees"
-
-# Sessions run in persistent worktree "lanes" (lane-0…lane-N-1) reused across issues — node_modules
-# and caches stay warm; each acquire salvages leftovers, resets, re-branches off the fresh base and
-# re-copies .worktreeinclude files. >1 is reserved for parallel wave mode (accepted, currently inert).
-worktree_lanes = 1

@@ -40,7 +40,7 @@ const RUN_FATAL_PATTERNS: [string, RegExp][] = [
     "board-shape",
     /board field "[^"]*" not found|status option "[^"]*" not on the board|project .* not found/,
   ],
-  ["install-cmd", /install_cmd "[^"]*" failed/],
+  ["setup-script", /scripts\.setup "[^"]*" failed/],
   // CI that never RAN. GitHub refuses to schedule jobs when the Actions spending limit is hit and
   // reports them `conclusion: failure` with zero steps in under a second — indistinguishable from a
   // genuine red at the rollup level. Left unclassified, the gate reads it as ci-red and blocks every

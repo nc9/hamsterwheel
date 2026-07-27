@@ -57,7 +57,7 @@ Cross-check issue state, not just board status: items linger in Ready after a me
 ## Per-issue pipeline
 
 1. **Claim** — Status→In Progress, Owner=run-id, claim comment. Roll every claim step back if any step fails.
-2. **Lane** — a persistent worktree from the `worktree_lanes` pool (`<worktree_root>/<repo>/lane-<i>`), reused across issues so node_modules/caches stay warm. Acquire is salvage-first: leftover work from a crashed run is committed to a durable WIP branch BEFORE `reset --hard` + `clean -fd` (never `-x`); then branch `-B <branch-prefix>/<n>-<slug>` off a freshly-fetched base (fetch per issue, so late items branch off the latest merged base); `git branch --unset-upstream` immediately after, so an unpinned push fails loudly instead of resolving its destination from the inherited upstream and landing on the base branch; copy `.worktreeinclude` files (worktrees are born without git-ignored env files); run the configured install cmd (incremental on a warm lane). Every push the loop issues or instructs carries an explicit refspec (`git push origin <branch>:<branch>`) — only a refspec containing `:` pins the destination.
+2. **Lane** — a persistent worktree from the `worktree_lanes` pool (`<worktree_root>/<repo>/lane-<i>`), reused across issues so node_modules/caches stay warm. Acquire is salvage-first: leftover work from a crashed run is committed to a durable WIP branch BEFORE `reset --hard` + `clean -fd` (never `-x`); then branch `-B <branch-prefix>/<n>-<slug>` off a freshly-fetched base (fetch per issue, so late items branch off the latest merged base); `git branch --unset-upstream` immediately after, so an unpinned push fails loudly instead of resolving its destination from the inherited upstream and landing on the base branch; copy `.worktreeinclude` files (worktrees are born without git-ignored env files); run the configured `[scripts]` setup command with `HAMSTER_*` context env vars (incremental on a warm lane; `HAMSTER_LANE_COLD` tells the script which case it is). Every push the loop issues or instructs carries an explicit refspec (`git push origin <branch>:<branch>`) — only a refspec containing `:` pins the destination.
 3. **Implement** — headless session inside the sandbox (`@hamsterwheel/sandbox`): fenced issue + criteria, explicit output contract (PR url on the last line | ALREADY-RESOLVED signal). Wall-clock timeout, then kill.
 4. **Classify** — `classifyImplement`: `pr` | `resolved` | `maybe-resolved` (corroborate with a prior merged closing PR before Done) | `fail` (salvage the dirty tree to a WIP branch).
 5. **Review loop** — wait for the configured review bot; triage every finding; fix NEW ones, rebut re-raised ones with file:line (the reviewer is stateless). **Cap: 4 rounds** (`max_review_rounds`). The reviewer re-derives from scratch every run, so each fix push triggers another deeper pass and it never converges: measured on a ~50-line PR, 6 rounds with findings 3→6→3→3→3→3, nothing substantive after round 3-4, and rounds 5-6 objecting to flags and identifiers that do not exist. The escape hatch is that a PR _comment_ does not trigger re-review — only a push does — so the loop posts the remaining findings as a comment and parks the PR for a human. Whatever produced a signal must be what re-verifies it: re-run the review, not just CI.
@@ -80,7 +80,7 @@ Never automated, regardless of config:
 **Run-fatal vs issue-fatal (the taxonomy the whole failure model hangs off).** A failure that is about
 THIS issue blocks THIS issue. A failure that would recur identically for every item — missing sandbox
 credentials, no docker, a runner not on PATH, broken gh auth, a board field that doesn't exist, an
-install command that can't run — is RUN-FATAL: it aborts the run on first occurrence, releases the
+setup script that can't run — is RUN-FATAL: it aborts the run on first occurrence, releases the
 in-flight claim back to Ready, and touches nothing else. The motivating incident: `run --execute
 --sandbox` launched without the sandbox token failed closed _per issue_, so it claimed → blocked →
 advanced, and destroyed a hand-curated Ready queue in under a minute. The security behaviour was
@@ -100,7 +100,7 @@ Serial by default: one issue start→merge→next, so double-claims and cross-PR
 
 ## Config (`hamsterwheel.toml`)
 
-repo slug · project board (field + option NAMES, never hardcoded) · base branch · branch prefix · review bot name + blocking-severity regex · `[[human]]` rules (paths/labels) · install cmd · worktree lanes · smoke/deploy hooks · allowed tools · runner+model+effort policy per role (default + validated label override) · session timeout · CI timeout · max review rounds · max iterations.
+repo slug · project board (field + option NAMES, never hardcoded) · base branch · branch prefix · review bot name + blocking-severity regex · `[[human]]` rules (paths/labels) · `[scripts]` setup · worktree lanes · smoke/deploy hooks · allowed tools · runner+model+effort policy per role (default + validated label override) · session timeout · CI timeout · max review rounds · max iterations.
 
 ## Observability
 

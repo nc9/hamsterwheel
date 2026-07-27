@@ -156,15 +156,19 @@ export const unsetUpstream = async (worktree: string): Promise<void> => {
 };
 
 /**
- * Run the configured install command in a fresh worktree (raw `worktree add` skips any session hooks).
+ * Run the `scripts.setup` command in a lane (raw `worktree add` skips any session hooks).
  * Split on whitespace and spawned WITHOUT a shell — no pipes, `&&` or globbing. A command needing those
- * belongs in a script the config points at.
+ * belongs in a script the config points at. `env` is layered over the process env (HAMSTER_* context).
  */
-export const runInstall = async (cmd: string, cwd: string): Promise<void> => {
+export const runSetup = async (
+  cmd: string,
+  cwd: string,
+  env: Record<string, string> = {},
+): Promise<void> => {
   const parts = cmd.split(/\s+/).filter(Boolean);
   if (!parts.length) return;
   const [bin, ...rest] = parts;
-  const r = await run(bin!, rest, { cwd });
+  const r = await run(bin!, rest, { cwd, env: { ...process.env, ...env } });
   if (r.exitCode !== 0)
-    throw new Error(`install_cmd "${cmd}" failed in ${cwd}: ${r.stderr.trim().slice(0, 300)}`);
+    throw new Error(`scripts.setup "${cmd}" failed in ${cwd}: ${r.stderr.trim().slice(0, 300)}`);
 };

@@ -22,13 +22,13 @@ import {
   isWorktree,
   pruneWorktrees,
   resetHard,
-  runInstall,
+  runSetup,
   unsetUpstream,
 } from "./git.ts";
 
 /**
  * Lanes: a fixed pool of PERSISTENT worktrees (lane-0…lane-N-1) reused across issues instead of a
- * throwaway worktree per run. The worktree itself was never the cost — the cold `install_cmd` and the
+ * throwaway worktree per run. The worktree itself was never the cost — the cold dependency install and the
  * missing git-ignored env files were. A lane keeps node_modules/caches warm (clean is `-fd`, never
  * `-x`) and re-copies `.worktreeinclude` files every acquire.
  *
@@ -157,8 +157,8 @@ export const acquireLane = async (opts: {
   runId: string;
   /** Primary checkout root — the source of `.worktreeinclude` files. */
   repoRoot: string;
-  /** Sandbox runs install in-container; the host install is skipped there. */
-  skipInstall?: boolean;
+  /** Sandbox installs in-container; the host-side setup script is skipped there. */
+  skipSetup?: boolean;
   log: (m: string) => void;
 }): Promise<LaneAcquisition> => {
   const { cfg, branch, log } = opts;
@@ -208,11 +208,20 @@ export const acquireLane = async (opts: {
   if (includes.length)
     log(`  ⇢ lane-${opts.lane}: copied ${includes.length} .worktreeinclude file(s)`);
 
-  if (!opts.skipInstall) {
-    log(
-      `  installing deps in lane-${opts.lane} (${cfg.installCmd})${created ? "" : " — incremental"} …`,
-    );
-    await runInstall(cfg.installCmd, dir);
+  // One setup script for cold AND warm acquires (a Codex-style separate maintenance script can be
+  // added later): package-manager installs are naturally incremental, and a script that cares can
+  // branch on HAMSTER_LANE_COLD.
+  const setup = cfg.scripts.setup;
+  if (setup && !opts.skipSetup) {
+    log(`  ⚙ lane-${opts.lane}: scripts.setup (${setup}) — ${created ? "cold" : "warm"} …`);
+    await runSetup(setup, dir, {
+      HAMSTER_WORKSPACE_PATH: dir,
+      HAMSTER_WORKSPACE_NAME: `lane-${opts.lane}`,
+      HAMSTER_ROOT_PATH: opts.repoRoot,
+      HAMSTER_LANE_COLD: created ? "1" : "0",
+      HAMSTER_ISSUE: String(opts.issueNumber),
+      HAMSTER_RUN_ID: opts.runId,
+    });
   }
   return { dir, created, recovered, includes };
 };

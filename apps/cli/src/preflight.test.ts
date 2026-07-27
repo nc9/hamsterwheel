@@ -119,7 +119,7 @@ describe("runFatalReason", () => {
     new Error("gh auth status failed (1): You are not logged into any GitHub hosts"),
     new Error('board field "Owner" not found on project #7'),
     new Error('status option "Blocked" not on the board (have: Ready)'),
-    new Error('install_cmd "bun install" failed in /tmp/wt: lockfile mismatch'),
+    new Error('scripts.setup "bun install" failed in /tmp/wt: lockfile mismatch'),
     new Error("gh api failed (1): HTTP 401: Bad credentials"),
   ];
   for (const e of fatal)

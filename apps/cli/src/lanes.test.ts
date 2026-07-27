@@ -26,7 +26,7 @@ const cfgFor = (worktreeRoot: string, over: Record<string, unknown> = {}) =>
       worktree_root: worktreeRoot,
       project: { number: 1 },
       human: [{ name: "prod-migration", paths: "(^|/)drizzle/" }],
-      install_cmd: "true", // a no-op binary: install must not dominate the test
+      scripts: { setup: "true" }, // a no-op binary: setup must not dominate the test
       ...over,
     },
     { home: "/home/ci" },
@@ -380,6 +380,71 @@ describe("acquireLane / releaseLane", () => {
       expect(shown).toBe("committed\n");
       // The impl branch itself was reset to base for the fresh attempt.
       expect((await $`git -C ${a2.dir} status --porcelain`.text()).trim()).toBe("");
+    } finally {
+      process.chdir(prevCwd);
+    }
+  });
+
+  test("scripts.setup runs with HAMSTER_* context env vars; cold flag flips on reuse", async () => {
+    const { primary } = await initRepoWithOrigin();
+    const wtRoot = mkdtempSync(join(tmpdir(), "hw-lanes5-"));
+    tmp.push(wtRoot);
+    // The probe ships in the repo (like a real setup script) and records what hamster exported.
+    await Bun.write(
+      join(primary, "setup-probe.sh"),
+      'printf "cold=%s name=%s path=%s root=%s issue=%s run=%s\\n" ' +
+        '"$HAMSTER_LANE_COLD" "$HAMSTER_WORKSPACE_NAME" "$HAMSTER_WORKSPACE_PATH" ' +
+        '"$HAMSTER_ROOT_PATH" "$HAMSTER_ISSUE" "$HAMSTER_RUN_ID" > hamster-env.txt\n',
+    );
+    await $`git -C ${primary} add -A`.quiet();
+    await $`git -C ${primary} commit -q -m probe`.quiet();
+    await $`git -C ${primary} push -q origin main:main`.quiet();
+    const cfg = cfgFor(wtRoot, { scripts: { setup: "sh setup-probe.sh" } });
+
+    const prevCwd = process.cwd();
+    process.chdir(primary);
+    try {
+      const a1 = await acquireLane({
+        cfg,
+        lane: 0,
+        branch: "loop/9-env",
+        issueNumber: 9,
+        runId: "rE1",
+        repoRoot: primary,
+        log: () => {},
+      });
+      expect(await readFile(join(a1.dir, "hamster-env.txt"), "utf8")).toBe(
+        `cold=1 name=lane-0 path=${a1.dir} root=${primary} issue=9 run=rE1\n`,
+      );
+
+      await releaseLane(cfg, 0);
+      const a2 = await acquireLane({
+        cfg,
+        lane: 0,
+        branch: "loop/10-env",
+        issueNumber: 10,
+        runId: "rE2",
+        repoRoot: primary,
+        log: () => {},
+      });
+      // clean -fd removed the previous dump; the warm re-run rewrote it with cold=0.
+      expect(await readFile(join(a2.dir, "hamster-env.txt"), "utf8")).toBe(
+        `cold=0 name=lane-0 path=${a2.dir} root=${primary} issue=10 run=rE2\n`,
+      );
+
+      // skipSetup (the sandbox path) must not run the script at all.
+      await releaseLane(cfg, 0);
+      const a3 = await acquireLane({
+        cfg,
+        lane: 0,
+        branch: "loop/11-env",
+        issueNumber: 11,
+        runId: "rE3",
+        repoRoot: primary,
+        skipSetup: true,
+        log: () => {},
+      });
+      expect(await readFile(join(a3.dir, "hamster-env.txt"), "utf8").catch(() => null)).toBeNull();
     } finally {
       process.chdir(prevCwd);
     }

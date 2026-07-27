@@ -95,7 +95,9 @@ The CLI is built to be driven headless — no command ever needs a human at the 
 
 ## Lanes: how sessions get a working copy
 
-Sessions never run in your checkout. Each issue runs in a **lane** — a persistent git worktree (`~/.hamsterwheel/worktrees/<repo>/lane-0`…) reused across issues so `node_modules` and build caches stay warm (the per-issue cost is an incremental install, not a cold one). `worktree_lanes` in the config sizes the pool; values >1 are accepted but inert until parallel wave mode ships.
+Sessions never run in your checkout. Each issue runs in a **lane** — a persistent git worktree (`~/.hamsterwheel/worktrees/<repo>/lane-0`…) reused across issues so `node_modules` and build caches stay warm (the per-issue cost is an incremental setup, not a cold one). `worktree_lanes` in the config sizes the pool; values >1 are accepted but inert until parallel wave mode ships.
+
+After every acquire hamster runs the configured setup script — `[scripts]` `setup` in `hamsterwheel.toml` (Conductor-style lifecycle table; `run`/`archive`/`maintenance` are reserved). It is argv-exec'd with **no shell** (pipes/`&&` belong in a repo script the config points at) and receives context env vars: `HAMSTER_WORKSPACE_PATH` (lane dir), `HAMSTER_WORKSPACE_NAME` (`lane-0`), `HAMSTER_ROOT_PATH` (primary checkout), `HAMSTER_LANE_COLD` (`1` fresh worktree / `0` warm reuse), `HAMSTER_ISSUE`, `HAMSTER_RUN_ID`. No `setup` configured → no setup step. The old `install_cmd` key is a hard config error. `hamster init` pre-fills `setup` from existing conventions when it can (`conductor.json` `scripts.setup`, `.cursor/environment.json` `install`, a `scripts/setup.sh`, or the lockfile's package manager) — detection happens only at init; the runtime obeys the explicit config alone.
 
 Acquiring a lane for an issue is salvage-first: any leftover work from a crashed run is committed to a durable `<prefix>/<n>-wip-lane…` branch **before** the lane is reset (`reset --hard` + `clean -fd` — never `-x`, so ignored files survive), then the lane branches off the freshly fetched base and its upstream is dropped. A dirty lane whose salvage fails refuses to reset rather than destroy work. On release the lane detaches so it never holds a branch ref.
 
@@ -150,7 +152,7 @@ A `[[human]]` rule has a `name` and fires on changed **paths** (case-insensitive
 | burst of instant failures, ~1/min, tiny transcripts | session quota exhaustion, not bugs — see reference                                        |
 | driver died mid-gate with a PR open                 | do **not** re-run that issue; finish the gate by hand                                     |
 
-A failure about **this** issue blocks this issue. A precondition that fails identically for every item — docker, gh auth, a missing runner binary, a broken install command — is **run-fatal**: abort, release the claim, touch nothing else. If a whole curated queue went Blocked in under a minute, that taxonomy is what broke, not the sandbox.
+A failure about **this** issue blocks this issue. A precondition that fails identically for every item — docker, gh auth, a missing runner binary, a broken setup script — is **run-fatal**: abort, release the claim, touch nothing else. If a whole curated queue went Blocked in under a minute, that taxonomy is what broke, not the sandbox.
 
 ## Reference
 

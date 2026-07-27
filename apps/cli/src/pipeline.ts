@@ -510,6 +510,29 @@ export const runImplement = async (
 };
 
 /**
+ * Put an item back on the queue: Ready, and NO owner. Both halves matter — an item left Ready with a
+ * live-looking owner is skipped by the claim guard on every future run, which is a silent, permanent
+ * leak of work out of the queue.
+ *
+ * Failures are logged, never swallowed. These run on an error path, so they must not mask the original
+ * fault by throwing, but a release that quietly failed is exactly how `clearOwner` stayed broken across
+ * two runs: it was calling an API that always errors, under a `.catch(() => {})`.
+ */
+const releaseClaim = async (deps: LoopDeps, iss: LoopIssue): Promise<void> => {
+  const { gh, cfg, ctx, log } = deps;
+  await setStatus(gh, ctx, iss.itemId, cfg.board.status.ready).catch((e: unknown) =>
+    log(
+      `  ⚠ could not release #${iss.number} to ${cfg.board.status.ready}: ${String(e).slice(0, 160)}`,
+    ),
+  );
+  await clearOwner(gh, ctx, iss.itemId).catch((e: unknown) =>
+    log(
+      `  ⚠ could not clear the owner on #${iss.number} — it will be skipped as claimed until cleared by hand: ${String(e).slice(0, 160)}`,
+    ),
+  );
+};
+
+/**
  * One issue, claim → merge/Blocked. The invariants here are the expensive ones:
  *  - the claim is guarded on the Owner field, and a partial claim is fully rolled back (status AND owner);
  *  - a failed session's dirty worktree is salvaged to a run-scoped WIP branch BEFORE teardown;
@@ -557,8 +580,7 @@ export const claimAndRun = async (
     // Roll the claim back so the item isn't orphaned In Progress with no live session behind it. The
     // OWNER must be cleared too: a half-claim (owner written, comment failed) would leave the item Ready
     // with a live-looking owner, and the claim guard above would then skip it forever.
-    await setStatus(gh, ctx, iss.itemId, cfg.board.status.ready).catch(() => {});
-    await clearOwner(gh, ctx, iss.itemId).catch(() => {});
+    await releaseClaim(deps, iss);
     log(
       `  ✗ claim failed for #${iss.number}, rolled back to ${cfg.board.status.ready}: ${String(e).slice(0, 160)}`,
     );
@@ -697,8 +719,7 @@ export const claimAndRun = async (
     // curated Ready queue got burned into Blocked in under a minute. Release the claim and abort.
     const fatal = runFatalReason(e);
     if (fatal) {
-      await setStatus(gh, ctx, iss.itemId, cfg.board.status.ready).catch(() => {});
-      await clearOwner(gh, ctx, iss.itemId).catch(() => {});
+      await releaseClaim(deps, iss);
       log(
         `  ✗ #${iss.number} released back to ${cfg.board.status.ready} — run-fatal: ${fatal.slice(0, 200)}`,
       );

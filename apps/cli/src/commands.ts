@@ -1,7 +1,7 @@
 import type { Config } from "@hamsterwheel/config";
 import { formatSessionPlan, resolveSessionPolicy } from "@hamsterwheel/gate";
 
-import { addItem, comment, listItems, setBlocked, setStatus } from "./board.ts";
+import { addItem, comment, fetchItemState, listItems, setBlocked, setStatus } from "./board.ts";
 import { buildQueue, enrichItem, isEpic, type LoopIssue } from "./issues.ts";
 import { type LoopDeps, claimAndRun } from "./pipeline.ts";
 
@@ -189,19 +189,45 @@ export const workQueue = async (
   // issue per invocation.
   const attempted = new Set<number>();
   let iter = 0;
+  // Built ONCE. Re-listing per tick pulls every item on the board plus a `gh issue view` for each Ready
+  // one; on a 385-item board that exhausted the 5,000-point GraphQL budget after two claims and aborted
+  // a serial run on `API rate limit exceeded`. Freshness is preserved where it matters by re-reading the
+  // single item about to be claimed, below — O(1) instead of O(board) per tick.
+  const { eligible } = await buildQueue(gh, cfg, await listItems(gh, ctx));
   do {
     // Backstop: never loop forever (e.g. an item that always rolls back to Ready).
     if (++iter > cfg.maxIterations) {
       log(`⚠ hit max_iterations (${cfg.maxIterations}) — stopping`);
       break;
     }
-    const { eligible } = await buildQueue(gh, cfg, await listItems(gh, ctx));
     const next = eligible.find((i) => !attempted.has(i.number));
     if (!next) {
       log("queue empty — idle");
       break;
     }
     attempted.add(next.number);
+    // The snapshot can be minutes old by now, so confirm THIS item is still Ready and unclaimed before
+    // spending a session on it. Unreadable → skip: a failed check is not a passed check.
+    const live = await fetchItemState(gh, ctx, next.itemId);
+    if (!live) {
+      log(
+        `  ⤳ #${next.number} — could not re-read board state, skipping rather than claiming blind`,
+      );
+      continue;
+    }
+    if (live.status !== cfg.board.status.ready) {
+      log(
+        `  ⤳ #${next.number} moved to ${live.status ?? "(no status)"} since the queue was built — skipping`,
+      );
+      continue;
+    }
+    if (live.owner?.trim()) {
+      log(
+        `  ⤳ #${next.number} claimed by run ${live.owner.trim()} since the queue was built — skipping`,
+      );
+      continue;
+    }
+    next.owner = live.owner;
     // A run-fatal error would recur identically on every remaining item, so it aborts the run instead of
     // walking the queue and blocking each item in turn. claimAndRun has already released its claim.
     await claimAndRun(loopDeps, next, opts.execute);

@@ -23,6 +23,9 @@ export type BoardCtx = {
   owner: string;
   statusFieldId: string;
   ownerFieldId: string;
+  /** Field NAMES as configured — fetchItemState matches field values by name, not id. */
+  statusFieldName: string;
+  ownerFieldName: string;
   /** Boards without a Blocked-reason field still work; the reason then rides the issue comment only. */
   blockedFieldId: string | null;
   statusOptions: Record<string, string>; // option name → option id
@@ -98,6 +101,8 @@ export const loadBoardCtx = async (gh: Gh, cfg: Config): Promise<BoardCtx> => {
     owner,
     statusFieldId: status.id,
     ownerFieldId: ownerField.id,
+    statusFieldName: cfg.board.statusField,
+    ownerFieldName: cfg.board.ownerField,
     blockedFieldId: field(cfg.board.blockedReasonField)?.id ?? null,
     statusOptions: options(cfg.board.statusField),
     blockedOptions: options(cfg.board.blockedReasonField),
@@ -151,6 +156,48 @@ const editField = async (gh: Gh, ctx: BoardCtx, itemId: string, fieldId: string,
     ...value,
   ]);
 
+/**
+ * Status + Owner for ONE item. The whole point is cost: `listItems` pulls every item on the board with
+ * all its field values, and on a 385-item board that burns the 5,000-point GraphQL budget in about two
+ * claims — a serial run died mid-batch on `API rate limit exceeded`. Re-reading one item before claiming
+ * gives the same freshness guarantee for O(1).
+ *
+ * Returns null when the item can't be read; callers must treat that as "don't claim", never as "clear".
+ */
+export const fetchItemState = async (
+  gh: Gh,
+  ctx: BoardCtx,
+  itemId: string,
+): Promise<{ status?: string; owner?: string } | null> => {
+  const q = `query($i:ID!){node(id:$i){... on ProjectV2Item{fieldValues(first:30){nodes{
+      __typename
+      ... on ProjectV2ItemFieldTextValue{text field{... on ProjectV2FieldCommon{name}}}
+      ... on ProjectV2ItemFieldSingleSelectValue{name field{... on ProjectV2FieldCommon{name}}}
+    }}}}}`;
+  const r = await gh.tryJson<{
+    data?: {
+      node?: {
+        fieldValues?: {
+          nodes?: {
+            __typename?: string;
+            text?: string;
+            name?: string;
+            field?: { name?: string };
+          }[];
+        };
+      };
+    };
+  }>(["api", "graphql", "-f", `query=${q}`, "-f", `i=${itemId}`]);
+  const nodes = r?.data?.node?.fieldValues?.nodes;
+  if (!nodes) return null;
+  const byField = (want: string): { text?: string; name?: string } | undefined =>
+    nodes.find((n) => n.field?.name?.toLowerCase() === want.toLowerCase());
+  return {
+    status: byField(ctx.statusFieldName)?.name,
+    owner: byField(ctx.ownerFieldName)?.text,
+  };
+};
+
 export const setStatus = async (
   gh: Gh,
   ctx: BoardCtx,
@@ -174,8 +221,26 @@ export const setOwner = async (
   await editField(gh, ctx, itemId, ctx.ownerFieldId, ["--text", runId]);
 };
 
+/**
+ * Release a claim. NOT `item-edit --text ""` — GitHub rejects that with "no changes to make", so the
+ * obvious implementation silently never clears anything. Combined with a `.catch(() => {})` at the call
+ * site (a release must not mask the original failure), that left every rolled-back item wearing a dead
+ * Owner forever, and the claim guard skipped it on every subsequent run. Clearing a field value is its
+ * own mutation.
+ */
 export const clearOwner = async (gh: Gh, ctx: BoardCtx, itemId: string): Promise<void> => {
-  await editField(gh, ctx, itemId, ctx.ownerFieldId, ["--text", ""]);
+  await gh.text([
+    "api",
+    "graphql",
+    "-f",
+    "query=mutation($p:ID!,$i:ID!,$f:ID!){clearProjectV2ItemFieldValue(input:{projectId:$p,itemId:$i,fieldId:$f}){projectV2Item{id}}}",
+    "-f",
+    `p=${ctx.projectId}`,
+    "-f",
+    `i=${itemId}`,
+    "-f",
+    `f=${ctx.ownerFieldId}`,
+  ]);
 };
 
 /**

@@ -191,6 +191,12 @@ describe("parseConfig — value validation", () => {
   test("numeric limits enforce a floor rather than silently accepting nonsense", () => {
     expect(problems(withOver({ ci_timeout_ms: 10 })).join()).toContain("ci_timeout_ms");
     expect(problems(withOver({ max_diff_bytes: 0 })).join()).toContain("max_diff_bytes");
+    expect(problems(withOver({ worktree_lanes: 0 })).join()).toContain("worktree_lanes");
+  });
+
+  test("worktree_lanes defaults to 1", () => {
+    expect(parseConfig(minimal(), { home: "/h" }).worktreeLanes).toBe(1);
+    expect(parseConfig(withOver({ worktree_lanes: 5 }), { home: "/h" }).worktreeLanes).toBe(5);
   });
 
   test("a non-table document is rejected outright", () => {

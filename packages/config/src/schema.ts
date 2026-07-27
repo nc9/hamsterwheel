@@ -77,6 +77,8 @@ export type Config = {
   maxReviewRounds: number;
   maxIterations: number;
   worktreeRoot: string;
+  /** Size of the persistent lane pool under `worktreeRoot` (lane-0…lane-N-1). >1 is reserved for wave mode. */
+  worktreeLanes: number;
 };
 
 export class ConfigError extends Error {
@@ -381,6 +383,7 @@ export const parseConfig = (raw: unknown, opts: { home?: string } = {}): Config 
     maxReviewRounds: r.num("max_review_rounds", 4, 0),
     maxIterations: r.num("max_iterations", 50),
     worktreeRoot: r.str("worktree_root", `${home}/.hamsterwheel/worktrees`),
+    worktreeLanes: r.num("worktree_lanes", 1, 1),
   };
   // Hard break from the pre-[[human]] config surface: silently ignoring the old key would drop the
   // migration guard without a sound.

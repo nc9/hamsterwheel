@@ -18,6 +18,8 @@ Everything repo-specific lives in `hamsterwheel.toml` (see `hamsterwheel.example
 
 ## Quick start
 
+First, make your repo worktree-ready: sessions run in persistent worktree **lanes**, and worktrees are born without git-ignored files. List anything a session needs (env files, local config) in a `.worktreeinclude` at the repo root — gitignore-style globs, copied into each lane before a session runs. `hamster doctor` warns about env-style files you haven't covered, and `hamster init` offers to scaffold it.
+
 ```bash
 bun install
 bun apps/cli/src/index.ts doctor          # what's ready, what's missing

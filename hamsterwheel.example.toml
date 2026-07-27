@@ -107,3 +107,8 @@ ci_timeout_ms = 900000 # give up waiting for checks after 15m (→ Blocked: ci-r
 max_diff_bytes = 60000 # diff slice handed to the rubric grader
 max_iterations = 50 # `run` backstop: never loop forever
 # worktree_root = "~/.hamsterwheel/worktrees"
+
+# Sessions run in persistent worktree "lanes" (lane-0…lane-N-1) reused across issues — node_modules
+# and caches stay warm; each acquire salvages leftovers, resets, re-branches off the fresh base and
+# re-copies .worktreeinclude files. >1 is reserved for parallel wave mode (accepted, currently inert).
+worktree_lanes = 1

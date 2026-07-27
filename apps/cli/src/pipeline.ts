@@ -16,7 +16,6 @@ import {
   reviewBlockingFindings,
   reviewCoversHead,
   wipBranchName,
-  worktreeAddArgs,
   worktreeHasChanges,
 } from "@hamsterwheel/gate";
 import { RUNNER_CAPABILITIES, contractLine, sleep as sleepMs } from "@hamsterwheel/runners";
@@ -24,17 +23,9 @@ import { RUNNER_CAPABILITIES, contractLine, sleep as sleepMs } from "@hamsterwhe
 import { type BoardCtx, clearOwner, comment, setBlocked, setOwner, setStatus } from "./board.ts";
 import { RunFatalError, runFatalReason } from "./errors.ts";
 import type { Gh } from "./gh.ts";
-import {
-  addWorktree,
-  baseRefFor,
-  fetchBase,
-  pruneWorktrees,
-  removeWorktree,
-  runInstall,
-  staleBaseFiles,
-  unsetUpstream,
-} from "./git.ts";
+import { baseRefFor, gitToplevel, staleBaseFiles } from "./git.ts";
 import { type LoopIssue, branchName, findPriorClosingPr } from "./issues.ts";
+import { acquireLane, laneDir, releaseLane } from "./lanes.ts";
 import { type Clock, type RunLog, makeRunId } from "./runlog.ts";
 import { runSession } from "./session.ts";
 
@@ -493,24 +484,35 @@ type ImplementSuccess =
   | { kind: "resolved"; via: "agent-signal" }
   | { kind: "maybe-resolved" };
 
-/** Run the implement session in a fresh worktree. Throws on a real failure; the caller salvages. */
+/** Run the implement session in a prepared lane. Throws on a real failure; the caller salvages. */
 export const runImplement = async (
   deps: LoopDeps,
   iss: LoopIssue,
   branch: string,
-  worktree: string,
+  lane: number,
+  runId: string,
 ): Promise<ImplementSuccess> => {
   const { cfg, log } = deps;
   // Last-line defense: never spawn on injection-flagged content even if the queue filter was bypassed.
   if (iss.injection.length)
     throw new Error(`refusing to run: injection markers (${iss.injection.join(", ")})`);
 
-  await fetchBase(cfg.baseBranch);
-  await pruneWorktrees();
-  await addWorktree(worktreeAddArgs(worktree, branch, `origin/${cfg.baseBranch}`));
-  // Immediately drop the inherited upstream so an unpinned push can't resolve its destination to the
-  // base branch (see unsetUpstream — this is the direct-to-main mechanism).
-  await unsetUpstream(worktree);
+  // Salvage-first prepare, branch off the fresh base, upstream dropped (direct-to-main safety),
+  // .worktreeinclude files copied, incremental install. The sandbox path installs in-container
+  // instead (Linux-native modules over the mounted worktree; the image entrypoint hardcodes
+  // `bun install` there — config's install_cmd applies to the host path only).
+  const { dir: worktree } = await acquireLane({
+    cfg,
+    lane,
+    branch,
+    issueNumber: iss.number,
+    runId,
+    // The repo TOPLEVEL, not cwd: the driver may run from a subdirectory (config resolves upward),
+    // and .worktreeinclude + its root-relative patterns live at the root.
+    repoRoot: (await gitToplevel()) ?? process.cwd(),
+    skipInstall: Boolean(deps.sandbox),
+    log,
+  });
 
   const plan = resolveSessionPolicy(iss, {
     implement: cfg.runners.implement,
@@ -535,13 +537,6 @@ export const runImplement = async (
       `resolved from the upstream and can land on ${cfg.baseBranch}. Never push to ${cfg.baseBranch} directly.`,
   });
 
-  if (!deps.sandbox) {
-    // A fresh worktree has no dependencies — install so the session can typecheck and test. The sandbox
-    // path installs inside the container instead (Linux-native modules over the mounted worktree) — note
-    // the image entrypoint hardcodes `bun install` there, so config's install_cmd applies to this path only.
-    log(`  installing deps in worktree (${cfg.installCmd}) …`);
-    await runInstall(cfg.installCmd, worktree);
-  }
   log(
     `  spawning implement session (${plan.runner}${plan.model ? `/${plan.model}` : ""}${plan.effort ? `/${plan.effort}` : ""}) in ${worktree} …`,
   );
@@ -620,9 +615,9 @@ const releaseClaim = async (deps: LoopDeps, iss: LoopIssue): Promise<void> => {
 /**
  * One issue, claim → merge/Blocked. The invariants here are the expensive ones:
  *  - the claim is guarded on the Owner field, and a partial claim is fully rolled back (status AND owner);
- *  - a failed session's dirty worktree is salvaged to a run-scoped WIP branch BEFORE teardown;
+ *  - a failed session's dirty lane is salvaged to a run-scoped WIP branch BEFORE teardown;
  *  - once the branch is pushed, salvage is skipped (the remote is the durable copy);
- *  - the worktree is always removed, success or failure.
+ *  - the lane is always released (detached, dir kept warm), success or failure.
  */
 export const claimAndRun = async (
   deps: LoopDeps,
@@ -633,7 +628,9 @@ export const claimAndRun = async (
   const now = deps.now ?? (() => new Date());
   const runId = makeRunId(iss.number, now);
   const branch = branchName(cfg, iss);
-  const worktree = `${cfg.worktreeRoot}/${runId}`;
+  // Serial loop: always lane 0. Wave mode will hand out distinct lanes per concurrent claim.
+  const lane = 0;
+  const worktree = laneDir(cfg, lane);
 
   if (!execute) {
     log(
@@ -660,7 +657,7 @@ export const claimAndRun = async (
       iss.number,
       `🐹 **hamsterwheel** claimed this issue.\n- run: \`${runId}\`\n- branch: \`${branch}\`\n- started: ${now().toISOString()}`,
     );
-    deps.runLog.append("claim", { issue: iss.number, branch, worktree });
+    deps.runLog.append("claim", { issue: iss.number, branch, lane, worktree });
   } catch (e) {
     // Roll the claim back so the item isn't orphaned In Progress with no live session behind it. The
     // OWNER must be cleared too: a half-claim (owner written, comment failed) would leave the item Ready
@@ -676,7 +673,7 @@ export const claimAndRun = async (
   // local WIP ref would be a misleading duplicate.
   let workPushed = false;
   try {
-    const outcome = await runImplement(deps, iss, branch, worktree);
+    const outcome = await runImplement(deps, iss, branch, lane, runId);
     if (outcome.kind !== "pr") {
       // No diff: the work is already in the base branch (a stale board entry) — Done, not Blocked. A bare
       // empty session with no explicit signal is only a CANDIDATE; corroborate with a prior merged PR,
@@ -845,8 +842,8 @@ export const claimAndRun = async (
       wipBranch: wip,
     });
   } finally {
-    // Always remove the worktree so stale dirs don't accumulate. Dirty work was already salvaged onto a
-    // plain ref, which outlives the worktree.
-    await removeWorktree(worktree);
+    // Release, don't remove: the lane stays warm (node_modules, caches) for the next issue. Dirty work
+    // was already salvaged onto a plain ref; the release just detaches so the branch ref is free.
+    await releaseLane(cfg, lane);
   }
 };

@@ -1,10 +1,12 @@
 import { readFile, writeFile } from "node:fs/promises";
+import { join } from "node:path";
 
 import { CONFIG_FILENAME, type Config, loadConfig, parseConfigText } from "@hamsterwheel/config";
 
 import { BLOCK_START, buildAgentDoc, spliceMarkedBlock } from "./agent-doc.ts";
 import { Gh } from "./gh.ts";
 import { type Check, printChecks, runChecks } from "./doctor.ts";
+import { ENV_FILE_PATTERNS, WORKTREE_INCLUDE_FILE, listIncludeFiles } from "./lanes.ts";
 
 /**
  * First-run setup. Idempotent, and it PRINTS EVERY MUTATION BEFORE MAKING IT — a first run against a
@@ -32,6 +34,7 @@ export type InitReport = {
   labelsCreated?: string[];
   config?: { path: string; action: "written" | "overwritten" | "unchanged" | "kept" | "proposed" };
   agentDocs?: { file: string; action: string }[];
+  worktreeInclude?: { path: string; action: "written" | "proposed" | "exists" | "not-needed" };
 };
 
 const defaultAsk = async (question: string): Promise<string> => {
@@ -97,6 +100,7 @@ repo = "${v.repo}"
 base_branch = "${v.baseBranch}"
 branch_prefix = "loop"
 install_cmd = "bun install"
+worktree_lanes = 1 # persistent worktree pool size (>1 reserved for parallel wave mode)
 
 # Human-review tripwires: work matching a rule is never auto-merged — the PR parks as
 # Blocked: needs-human. A rule fires on changed paths (regex) and/or issue labels.
@@ -307,6 +311,42 @@ const writeAgentDocs = async (
   return actions;
 };
 
+/**
+ * Offer a `.worktreeinclude` seeded with the repo's detected env-style files. Sessions run in lanes
+ * (fresh worktrees), which are born without git-ignored files — an undeclared .env is invisible to
+ * every session. No env-style files and no existing file → nothing to do.
+ */
+const scaffoldWorktreeInclude = async (
+  opts: InitOptions,
+): Promise<NonNullable<InitReport["worktreeInclude"]>> => {
+  const path = join(opts.cwd, WORKTREE_INCLUDE_FILE);
+  if ((await readFile(path, "utf8").catch(() => null)) !== null) {
+    opts.log(`\n${WORKTREE_INCLUDE_FILE}: already present — leaving it alone`);
+    return { path, action: "exists" };
+  }
+  const envish = await listIncludeFiles(opts.cwd, ENV_FILE_PATTERNS);
+  if (!envish.length) {
+    opts.log(`\n${WORKTREE_INCLUDE_FILE}: no env-style files detected — not needed`);
+    return { path, action: "not-needed" };
+  }
+  const content = [
+    "# Files hamster copies into each worktree lane before a session runs.",
+    "# Gitignore-style globs, one per line. Worktrees are born WITHOUT git-ignored",
+    "# files — list anything a session needs to build/test (env files, local config).",
+    ...envish,
+    "",
+  ].join("\n");
+  opts.log(
+    `\n${WORKTREE_INCLUDE_FILE}: detected env-style files sessions would not see. Proposed:`,
+  );
+  for (const line of content.trimEnd().split("\n")) opts.log(`    | ${line}`);
+  if (!opts.dryRun && (await confirm(opts, `  write ${WORKTREE_INCLUDE_FILE}?`))) {
+    await writeFile(path, content);
+    return { path, action: "written" };
+  }
+  return { path, action: "proposed" };
+};
+
 export const init = async (opts: InitOptions): Promise<{ code: number; report: InitReport }> => {
   const gh = opts.gh ?? new Gh();
   const report: InitReport = { checks: [] };
@@ -396,6 +436,7 @@ export const init = async (opts: InitOptions): Promise<{ code: number; report: I
   // Parse what we just proposed so the agent-doc block reflects the real (validated) names even on a dry run.
   const cfg = await loadConfig(configPath).catch(() => parseConfigText(rendered));
   report.agentDocs = await writeAgentDocs(opts, cfg);
+  report.worktreeInclude = await scaffoldWorktreeInclude(opts);
 
   opts.log("\nSummary:");
   report.checks = await runChecks({ cwd: opts.cwd, gh });

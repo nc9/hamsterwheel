@@ -1,7 +1,17 @@
+import { readFile } from "node:fs/promises";
+import { join } from "node:path";
+
 import { CONFIG_FILENAME, ConfigError, findConfig, loadConfig } from "@hamsterwheel/config";
 import { detectRunners, git, systemRunnerLookup, whichBin } from "@hamsterwheel/runners";
 
 import { Gh } from "./gh.ts";
+import {
+  ENV_FILE_PATTERNS,
+  WORKTREE_INCLUDE_FILE,
+  listIncludeFiles,
+  parseWorktreeInclude,
+  uncoveredEnvFiles,
+} from "./lanes.ts";
 
 /**
  * Prerequisite verification, shared by `doctor` and the first half of `init`. Every check answers one
@@ -17,6 +27,32 @@ const has = (bin: string): boolean => whichBin(bin) !== null;
 export const parseTokenScopes = (authStatus: string): string[] => {
   const m = authStatus.match(/Token scopes:\s*(.+)/i);
   return m ? [...m[1]!.matchAll(/'([^']+)'/g)].map((x) => x[1]!) : [];
+};
+
+/** One check summarizing lane/worktree readiness for this repo. Exported for unit tests. */
+export const worktreeReadiness = async (root: string): Promise<Check> => {
+  const name = "worktree ready";
+  const text = await readFile(join(root, WORKTREE_INCLUDE_FILE), "utf8").catch(() => null);
+  const patterns = text === null ? [] : parseWorktreeInclude(text);
+  const envish = await listIncludeFiles(root, ENV_FILE_PATTERNS);
+  const uncovered = uncoveredEnvFiles(envish, patterns);
+  if (uncovered.length)
+    return {
+      name,
+      status: "warn",
+      detail: `${uncovered.slice(0, 4).join(", ")}${uncovered.length > 4 ? ` (+${uncovered.length - 4} more)` : ""} not covered by ${WORKTREE_INCLUDE_FILE} — sessions in lanes won't see ${uncovered.length > 1 ? "them" : "it"}`,
+    };
+  if (text === null)
+    return {
+      name,
+      status: "ok",
+      detail: `no env-style files detected; no ${WORKTREE_INCLUDE_FILE} needed`,
+    };
+  return {
+    name,
+    status: "ok",
+    detail: `${WORKTREE_INCLUDE_FILE} present (${patterns.length} pattern(s), covers ${envish.length} env-style file(s))`,
+  };
 };
 
 export const runChecks = async (opts: { cwd: string; gh?: Gh }): Promise<Check[]> => {
@@ -35,6 +71,9 @@ export const runChecks = async (opts: { cwd: string; gh?: Gh }): Promise<Check[]
             detail: `${opts.cwd} is not inside a git repository`,
           },
     );
+    // Worktree readiness: sessions run in lanes (fresh worktrees), which are born WITHOUT git-ignored
+    // files. Any env-style file not declared in .worktreeinclude is invisible to every session.
+    if (root) checks.push(await worktreeReadiness(root));
   }
 
   if (!has("gh")) {

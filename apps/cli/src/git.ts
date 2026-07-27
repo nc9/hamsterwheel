@@ -23,6 +23,60 @@ export const removeWorktree = async (worktree: string): Promise<void> => {
   await git(["worktree", "remove", "--force", worktree]);
 };
 
+/** True when `dir` exists and is inside a git work tree (same probe salvage uses). */
+export const isWorktree = async (dir: string): Promise<boolean> =>
+  (await git(["rev-parse", "--is-inside-work-tree"], dir)).exitCode === 0;
+
+const must = async (args: string[], cwd: string): Promise<void> => {
+  const r = await git(args, cwd);
+  if (r.exitCode !== 0)
+    throw new Error(`git ${args.join(" ")} failed: ${r.stderr.toString().trim().slice(0, 300)}`);
+};
+
+/** Discard tracked changes. Callers MUST have salvaged first — this is destructive by design. */
+export const resetHard = (worktree: string): Promise<void> => must(["reset", "--hard"], worktree);
+
+/** Remove untracked non-ignored files/dirs (`-fd`, NOT `-x`: ignored files — node_modules, caches,
+ * copied env files — are the whole point of a persistent lane). Salvage first: -fd deletes work. */
+export const cleanUntracked = (worktree: string): Promise<void> => must(["clean", "-fd"], worktree);
+
+/** `checkout -B` (reset-or-create) — a lane re-run reuses the branch name, same rationale as
+ * `worktreeAddArgs`. Only safe because releaseLane detaches, so no other worktree holds the branch. */
+export const checkoutBranch = (worktree: string, branch: string, baseRef: string): Promise<void> =>
+  must(["checkout", "-B", branch, baseRef], worktree);
+
+/** Detach the lane from its branch so the ref is free for other worktrees / branch deletion. */
+export const detachHead = (worktree: string, baseRef: string): Promise<void> =>
+  must(["checkout", "--detach", baseRef], worktree);
+
+/** Currently checked-out branch name, or "" when detached. */
+export const currentBranch = async (worktree: string): Promise<string> =>
+  (await git(["branch", "--show-current"], worktree)).stdout.toString().trim();
+
+/** Commits on HEAD that baseRef doesn't have. 0 on error (an unknown ref proves nothing is ahead). */
+export const aheadCount = async (worktree: string, baseRef: string): Promise<number> => {
+  const r = await git(["rev-list", "--count", `${baseRef}..HEAD`], worktree);
+  return r.exitCode === 0 ? Number(r.stdout.toString().trim()) || 0 : 0;
+};
+
+/** Point (or create) a branch at HEAD without switching to it. */
+export const forceBranchAt = (worktree: string, name: string): Promise<void> =>
+  must(["branch", "-f", name, "HEAD"], worktree);
+
+/** Absolute path of the worktree's PRIVATE git dir (survives `clean -fd`, dies with the worktree). */
+export const gitDirOf = async (worktree: string): Promise<string | null> => {
+  const r = await git(["rev-parse", "--absolute-git-dir"], worktree);
+  const out = r.stdout.toString().trim();
+  return r.exitCode === 0 && out ? out : null;
+};
+
+/** Toplevel of the repo containing `cwd` — the primary checkout root when run from a subdirectory. */
+export const gitToplevel = async (cwd?: string): Promise<string | null> => {
+  const r = await git(["rev-parse", "--show-toplevel"], cwd);
+  const out = r.stdout.toString().trim();
+  return r.exitCode === 0 && out ? out : null;
+};
+
 /** Local branch names under a prefix. Prefix match (trailing "/", no glob). */
 export const localBranches = async (prefix: string): Promise<string[]> => {
   const out = (await git(["for-each-ref", "--format=%(refname:short)", `refs/heads/${prefix}/`]))

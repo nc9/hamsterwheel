@@ -278,6 +278,12 @@ export const workQueue = async (
   const { gh, cfg, ctx, log } = deps;
   const loopDeps: LoopDeps = { ...deps };
 
+  // The config key ships ahead of wave mode so repos can prepare; only the pool size is inert.
+  if (cfg.worktreeLanes > 1)
+    log(
+      `  (worktree_lanes = ${cfg.worktreeLanes}: parallel lanes are not implemented yet — running serially on lane-0)`,
+    );
+
   if (opts.issue !== undefined) {
     const { eligible } = await buildQueue(gh, cfg, await listItems(gh, ctx));
     const target = eligible.find((i) => i.number === opts.issue);

@@ -93,6 +93,23 @@ The CLI is built to be driven headless — no command ever needs a human at the 
 - **`once`/`run` `--json`** replays the structured run-log events (`claim`, `pr-open`, `gate`, `merged`, `blocked`, `failed`, …) plus a summary with counts — the same events written to `~/.hamsterwheel/runs/*.jsonl`.
 - **`init` never prompts off a TTY**: pass `--yes` to apply or `--dry-run` to preview (mandatory with `--json`); `--project-title <t>` overrides the default board title "Loop".
 
+## Lanes: how sessions get a working copy
+
+Sessions never run in your checkout. Each issue runs in a **lane** — a persistent git worktree (`~/.hamsterwheel/worktrees/<repo>/lane-0`…) reused across issues so `node_modules` and build caches stay warm (the per-issue cost is an incremental install, not a cold one). `worktree_lanes` in the config sizes the pool; values >1 are accepted but inert until parallel wave mode ships.
+
+Acquiring a lane for an issue is salvage-first: any leftover work from a crashed run is committed to a durable `<prefix>/<n>-wip-lane…` branch **before** the lane is reset (`reset --hard` + `clean -fd` — never `-x`, so ignored files survive), then the lane branches off the freshly fetched base and its upstream is dropped. A dirty lane whose salvage fails refuses to reset rather than destroy work. On release the lane detaches so it never holds a branch ref.
+
+**Prepare your repo:** worktrees are born WITHOUT git-ignored files, so a session in a lane can't see your `.env` — builds and tests that need it fail in ways your main checkout never shows. Declare what must be copied in via `.worktreeinclude` at the repo root (gitignore-style globs, one per line, `#` comments; a bare name matches at any depth, `/`-containing patterns anchor to the root):
+
+```
+# copied into every lane before a session runs
+.env
+.env.*
+.dev.vars
+```
+
+Files are re-copied fresh on every acquire (copies, never symlinks — a session can't corrupt the originals). `hamster doctor` has a `worktree ready` check that warns about env-style files no pattern covers, and `hamster init` offers to scaffold the file from what it detects.
+
 ## Running a batch
 
 ```bash

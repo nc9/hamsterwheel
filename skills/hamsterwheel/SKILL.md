@@ -91,7 +91,7 @@ The CLI is built to be driven headless — no command ever needs a human at the 
 - **`hamster <command> --help`** documents that command's flags, exit codes, and the exact `--json` shape. Trust it over memory.
 - **Flags are validated per command**: a flag on a command it doesn't apply to (e.g. `plan --delete`) exits 1 with the list of commands that accept it — it is never silently ignored.
 - **`once`/`run` `--json`** replays the structured run-log events (`claim`, `pr-open`, `gate`, `merged`, `blocked`, `failed`, …) plus a summary with counts — the same events written to `~/.hamsterwheel/runs/*.jsonl`.
-- **`init` never prompts off a TTY**: pass `--yes` to apply or `--dry-run` to preview (mandatory with `--json`); `--project-title <t>` overrides the default board title "Loop".
+- **`init` never prompts off a TTY**: pass `--yes` to apply or `--dry-run` to preview (mandatory with `--json`); `--project-title <t>` overrides the default board title "<repo-name> Loop" (the repo name is in the default because most orgs run multiple boards).
 
 ## Lanes: how sessions get a working copy
 

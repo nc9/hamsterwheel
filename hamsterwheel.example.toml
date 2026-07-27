@@ -76,7 +76,7 @@ paths = "(^|/)(migrations|drizzle)/"
 [project]
 # number OR title is required. `hamsterwheel init` fills `number` in after provisioning the board.
 number = 3
-title = "Loop"
+title = "backend Loop"
 # owner = "acme"                # defaults to the owner segment of `repo`
 
 # Board field + option NAMES. Nothing is hardcoded — point these at whatever your board already uses.

@@ -19,7 +19,7 @@ export type InitOptions = {
   cwd: string;
   yes: boolean;
   dryRun: boolean;
-  /** Board title, default "Loop". */
+  /** Board title, default "<repo-name> Loop" — orgs run many boards, so the name must say whose. */
   projectTitle?: string;
   log: (m: string) => void;
   ask?: (question: string) => Promise<string>;
@@ -447,7 +447,7 @@ export const init = async (opts: InitOptions): Promise<{ code: number; report: I
   }
   report.repo = repo;
   const owner = repo.split("/")[0]!;
-  const title = opts.projectTitle ?? "Loop";
+  const title = opts.projectTitle ?? `${repo.split("/")[1]} Loop`;
   opts.log(`\nBoard (${owner}):`);
   const project = await ensureProject(gh, opts, owner, title);
   report.project = project;

@@ -81,7 +81,7 @@ export const FLAG_SPECS: readonly FlagSpec[] = [
   {
     flag: "--project-title",
     arg: "<title>",
-    desc: 'title for the Projects v2 board (default "Loop")',
+    desc: 'title for the Projects v2 board (default "<repo-name> Loop")',
     commands: ["init"],
   },
   {
@@ -123,7 +123,7 @@ export type ParsedArgs = {
   /** once/run: target a specific Ready+eligible issue instead of the head of the queue. */
   issue?: number;
   configPath?: string;
-  /** init: board title (default "Loop"). */
+  /** init: board title (default "<repo-name> Loop"). */
   projectTitle?: string;
   /** Canonical flags seen on the command line, for per-command applicability validation. */
   seen: string[];

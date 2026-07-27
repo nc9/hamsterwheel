@@ -27,3 +27,4 @@ export {
   detectRunners,
   systemRunnerLookup,
 } from "./detect.ts";
+export { type RunResult, run, git, whichBin, sleep } from "./exec.ts";

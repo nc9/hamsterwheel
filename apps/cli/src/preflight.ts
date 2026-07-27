@@ -1,6 +1,6 @@
 import type { Config } from "@hamsterwheel/config";
 import { resolveSandboxEnv } from "@hamsterwheel/sandbox";
-import { RUNNERS, type RunnerName } from "@hamsterwheel/runners";
+import { RUNNERS, type RunnerName, whichBin } from "@hamsterwheel/runners";
 
 import { RunFatalError } from "./errors.ts";
 
@@ -26,7 +26,7 @@ export type PreflightProblem = { check: string; detail: string; hint: string };
 
 export const preflightProblems = (input: PreflightInput): PreflightProblem[] => {
   const env = input.env ?? process.env;
-  const which = input.which ?? ((b: string) => Bun.which(b));
+  const which = input.which ?? ((b: string) => whichBin(b));
   const problems: PreflightProblem[] = [];
 
   // Any runner a label could select must exist too: discovering a missing binary on issue #7 of 20

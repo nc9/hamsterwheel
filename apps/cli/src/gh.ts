@@ -3,18 +3,12 @@
  * string — so issue text, branch names and label values can't be reinterpreted by a shell. The exec
  * function is injected, which is what lets the board/queue logic be tested without touching GitHub.
  */
+import { run } from "@hamsterwheel/runners";
+
 export type ExecResult = { stdout: string; stderr: string; exitCode: number };
 export type GhExec = (args: string[]) => Promise<ExecResult>;
 
-export const systemGhExec: GhExec = async (args) => {
-  const proc = Bun.spawn(["gh", ...args], { stdout: "pipe", stderr: "pipe" });
-  const [stdout, stderr] = await Promise.all([
-    new Response(proc.stdout).text(),
-    new Response(proc.stderr).text(),
-  ]);
-  await proc.exited;
-  return { stdout, stderr, exitCode: proc.exitCode ?? 1 };
-};
+export const systemGhExec: GhExec = async (args) => run("gh", args);
 
 export class Gh {
   constructor(private readonly exec: GhExec = systemGhExec) {}

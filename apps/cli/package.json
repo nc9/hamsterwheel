@@ -23,9 +23,10 @@
     "directory": "apps/cli"
   },
   "bin": {
-    "hamsterwheel": "./src/index.ts"
+    "hamsterwheel": "./dist/index.js"
   },
   "files": [
+    "dist",
     "src",
     "!src/**/*.test.ts",
     "README.md",
@@ -33,7 +34,9 @@
   ],
   "type": "module",
   "scripts": {
-    "typecheck": "tsgo --noEmit"
+    "typecheck": "tsgo --noEmit",
+    "build": "bun ../../scripts/build.ts",
+    "prepublishOnly": "bun ../../scripts/build.ts"
   },
   "dependencies": {
     "@hamsterwheel/config": "workspace:*",

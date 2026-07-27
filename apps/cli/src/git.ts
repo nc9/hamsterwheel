@@ -1,35 +1,32 @@
-import { $ } from "bun";
+import { git, run } from "@hamsterwheel/runners";
 
-/** Thin git helpers. Every argument is interpolated by Bun Shell as a single quoted token, never a word. */
+/** Thin git helpers. Every argument is a separate argv element — no shell, so nothing is re-parsed. */
 
 export const fetchBase = async (baseBranch: string): Promise<void> => {
   // Refresh the base per issue so a later item in a multi-issue run branches off the LATEST merged base,
   // not the ref captured at process start. A transient failure (offline/race) is tolerated.
-  await $`git fetch origin ${baseBranch}`.quiet().nothrow();
+  await git(["fetch", "origin", baseBranch]);
 };
 
 /** Dir-less worktree registrations block `worktree add -B` with "already checked out". */
 export const pruneWorktrees = async (): Promise<void> => {
-  await $`git worktree prune`.quiet().nothrow();
+  await git(["worktree", "prune"]);
 };
 
 export const addWorktree = async (args: string[]): Promise<void> => {
-  const r = await $`git ${args}`.quiet().nothrow();
+  const r = await git(args);
   if (r.exitCode !== 0)
     throw new Error(`git ${args.join(" ")} failed: ${r.stderr.toString().trim().slice(0, 300)}`);
 };
 
 export const removeWorktree = async (worktree: string): Promise<void> => {
-  await $`git worktree remove --force ${worktree}`.quiet().nothrow();
+  await git(["worktree", "remove", "--force", worktree]);
 };
 
 /** Local branch names under a prefix. Prefix match (trailing "/", no glob). */
 export const localBranches = async (prefix: string): Promise<string[]> => {
-  const out = (
-    await $`git for-each-ref --format=${"%(refname:short)"} ${`refs/heads/${prefix}/`}`
-      .quiet()
-      .nothrow()
-  ).stdout.toString();
+  const out = (await git(["for-each-ref", "--format=%(refname:short)", `refs/heads/${prefix}/`]))
+    .stdout;
   return out
     .split("\n")
     .map((l) => l.trim())
@@ -45,7 +42,7 @@ export const localBranches = async (prefix: string): Promise<string[]> => {
 export const deleteBranch = async (
   branch: string,
 ): Promise<{ ok: boolean; was: string; error: string }> => {
-  const r = await $`git branch -D ${branch}`.quiet().nothrow();
+  const r = await git(["branch", "-D", branch]);
   const was = /\(was ([0-9a-f]+)\)/.exec(r.stdout.toString())?.[1] ?? "";
   return { ok: r.exitCode === 0, was, error: r.stderr.toString().trim().slice(0, 200) };
 };
@@ -61,7 +58,7 @@ export const deleteBranch = async (
  */
 export const baseRefFor = async (worktree: string, baseBranch: string): Promise<string> => {
   const remote = `origin/${baseBranch}`;
-  const r = await $`git -C ${worktree} merge-base ${remote} HEAD`.quiet().nothrow();
+  const r = await git(["merge-base", remote, "HEAD"], worktree);
   const sha = r.stdout.toString().trim();
   return r.exitCode === 0 && sha ? sha : remote;
 };
@@ -77,7 +74,7 @@ export const staleBaseFiles = async (
   base: string,
 ): Promise<string[]> => {
   const names = async (ref: string): Promise<Set<string>> => {
-    const r = await $`git -C ${worktree} diff --name-only ${ref}`.quiet().nothrow();
+    const r = await git(["diff", "--name-only", ref], worktree);
     return new Set(
       r.stdout
         .toString()
@@ -101,7 +98,7 @@ export const staleBaseFiles = async (
  * after refspec resolution). With no upstream, an unpinned push fails loudly instead of landing on main.
  */
 export const unsetUpstream = async (worktree: string): Promise<void> => {
-  await $`git -C ${worktree} branch --unset-upstream`.quiet().nothrow();
+  await git(["branch", "--unset-upstream"], worktree);
 };
 
 /**
@@ -112,10 +109,8 @@ export const unsetUpstream = async (worktree: string): Promise<void> => {
 export const runInstall = async (cmd: string, cwd: string): Promise<void> => {
   const parts = cmd.split(/\s+/).filter(Boolean);
   if (!parts.length) return;
-  const proc = Bun.spawn(parts, { cwd, stdout: "ignore", stderr: "pipe" });
-  await proc.exited;
-  if (proc.exitCode !== 0) {
-    const err = await new Response(proc.stderr).text();
-    throw new Error(`install_cmd "${cmd}" failed in ${cwd}: ${err.trim().slice(0, 300)}`);
-  }
+  const [bin, ...rest] = parts;
+  const r = await run(bin!, rest, { cwd });
+  if (r.exitCode !== 0)
+    throw new Error(`install_cmd "${cmd}" failed in ${cwd}: ${r.stderr.trim().slice(0, 300)}`);
 };

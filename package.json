@@ -8,7 +8,8 @@
   "scripts": {
     "lint": "oxlint .",
     "format": "oxfmt .",
-    "test": "bun test"
+    "test": "bun test",
+    "build": "bun scripts/build.ts"
   },
   "devDependencies": {
     "@typescript/native-preview": "^7.0.0-dev.20260707.2",

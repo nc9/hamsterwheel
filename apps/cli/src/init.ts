@@ -1,4 +1,6 @@
-import { CONFIG_FILENAME, type Config, loadConfig, parseConfig } from "@hamsterwheel/config";
+import { readFile, writeFile } from "node:fs/promises";
+
+import { CONFIG_FILENAME, type Config, loadConfig, parseConfigText } from "@hamsterwheel/config";
 
 import { BLOCK_START, buildAgentDoc, spliceMarkedBlock } from "./agent-doc.ts";
 import { Gh } from "./gh.ts";
@@ -244,9 +246,9 @@ const writeAgentDocs = async (opts: InitOptions, cfg: Config): Promise<void> => 
   opts.log("──────────────────────────────────────────────────────────────────────────\n");
   for (const name of ["CLAUDE.md", "AGENTS.md"]) {
     const path = `${opts.cwd}/${name}`;
-    const file = Bun.file(path);
-    if (!(await file.exists())) continue; // never create agent guidance that doesn't exist yet
-    const existing = await file.text();
+    // never create agent guidance that doesn't exist yet
+    const existing = await readFile(path, "utf8").catch(() => null);
+    if (existing === null) continue;
     const next = spliceMarkedBlock(existing, block);
     if (next === null) {
       opts.log(
@@ -263,7 +265,7 @@ const writeAgentDocs = async (opts: InitOptions, cfg: Config): Promise<void> => 
       : "APPEND the block to";
     opts.log(`  + ${verb} ${name}`);
     if (opts.dryRun) continue;
-    if (await confirm(opts, `    write ${name}?`)) await Bun.write(path, next);
+    if (await confirm(opts, `    write ${name}?`)) await writeFile(path, next);
   }
 };
 
@@ -319,24 +321,23 @@ export const init = async (opts: InitOptions): Promise<number> => {
     baseBranch,
   });
   opts.log(`\nConfig:`);
-  const exists = await Bun.file(configPath).exists();
-  if (exists) {
-    const current = await Bun.file(configPath).text();
+  const current = await readFile(configPath, "utf8").catch(() => null);
+  if (current !== null) {
     if (current === rendered) opts.log(`  · ${CONFIG_FILENAME} already matches`);
     else {
       opts.log(`  ! ${CONFIG_FILENAME} exists and differs. Proposed:\n`);
       for (const line of rendered.split("\n")) opts.log(`    | ${line}`);
       if (!opts.dryRun && (await confirm(opts, `  overwrite ${CONFIG_FILENAME}?`)))
-        await Bun.write(configPath, rendered);
+        await writeFile(configPath, rendered);
       else opts.log("  · kept the existing file");
     }
   } else {
     opts.log(`  + WRITE ${configPath}`);
-    if (!opts.dryRun) await Bun.write(configPath, rendered);
+    if (!opts.dryRun) await writeFile(configPath, rendered);
   }
 
   // Parse what we just proposed so the agent-doc block reflects the real (validated) names even on a dry run.
-  const cfg = await loadConfig(configPath).catch(() => parseConfig(Bun.TOML.parse(rendered)));
+  const cfg = await loadConfig(configPath).catch(() => parseConfigText(rendered));
   await writeAgentDocs(opts, cfg);
 
   opts.log("\nSummary:");

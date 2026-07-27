@@ -30,7 +30,7 @@ export type RunnerSpec = {
 
 /**
  * Build the exact argv for a headless runner session, binary included (`["claude", "-p", …]`), so the
- * result can be handed straight to `Bun.spawn` or used as a sandbox `command`.
+ * result can be handed straight to a spawn call or used as a sandbox `command`.
  *
  * PURE + SECURITY-CRITICAL (unit-tested per runner and role). Every element is a separate array member:
  * nothing is ever concatenated into a shell string, so a hostile label value cannot break out. Model and

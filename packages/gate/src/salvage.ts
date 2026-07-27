@@ -1,4 +1,4 @@
-import { $ } from "bun";
+import { git } from "@hamsterwheel/runners";
 
 // -B not -b: a re-run reuses the branch name (remove frees the dir, leaves the ref) and -b dies exit-255
 // on it. baseRef is the REMOTE base (default origin/main) so re-runs branch off the latest merged base.
@@ -20,8 +20,8 @@ export async function worktreeHasChanges(
   worktree: string,
   baseRef = "origin/main",
 ): Promise<boolean> {
-  const diff = await $`git -C ${worktree} diff --quiet ${baseRef}`.quiet().nothrow();
-  const status = await $`git -C ${worktree} status --porcelain`.quiet().nothrow();
+  const diff = await git(["diff", "--quiet", baseRef], worktree);
+  const status = await git(["status", "--porcelain"], worktree);
   return diff.exitCode !== 0 || status.stdout.toString().trim().length > 0;
 }
 
@@ -37,27 +37,27 @@ export async function preserveWorktreeChanges(
   baseRef = "origin/main",
 ): Promise<string | null> {
   // Worktree may not exist if the failure predates `git worktree add` (e.g. a missing --sandbox token).
-  const inside = await $`git -C ${worktree} rev-parse --is-inside-work-tree`.quiet().nothrow();
+  const inside = await git(["rev-parse", "--is-inside-work-tree"], worktree);
   if (inside.exitCode !== 0) return null;
   if (!(await worktreeHasChanges(worktree, baseRef))) return null; // clean no-op → nothing to preserve
-  await $`git -C ${worktree} add -A`.quiet().nothrow();
+  await git(["add", "-A"], worktree);
   // Only commit if something is actually staged. A no-op commit ("nothing to commit") exits non-zero
   // harmlessly — but a REAL commit failure (e.g. missing git identity) must NOT fall through to branching
   // at the pre-salvage HEAD and falsely report the uncommitted work as preserved. So gate on the staged
   // check, and if there IS staged content the commit must succeed. --no-verify: hooks false-fail in fresh worktrees.
-  const staged = await $`git -C ${worktree} diff --cached --quiet`.quiet().nothrow(); // exit != 0 ⇒ staged content exists
+  const staged = await git(["diff", "--cached", "--quiet"], worktree); // exit != 0 ⇒ staged content exists
   if (staged.exitCode !== 0) {
-    const committed =
-      await $`git -C ${worktree} commit --no-verify -m ${`wip: preserve failed loop session (${wipBranch})`}`
-        .quiet()
-        .nothrow();
+    const committed = await git(
+      ["commit", "--no-verify", "-m", `wip: preserve failed loop session (${wipBranch})`],
+      worktree,
+    );
     if (committed.exitCode !== 0) return null; // couldn't capture the staged work → don't claim a false save
   }
   // Final guarantee against a false "preserved": if ANY uncommitted change remains (e.g. `add -A` itself
   // failed partway on a bad gitlink/permission), the salvage did NOT capture the tree — don't claim a save.
-  const leftover = await $`git -C ${worktree} status --porcelain`.quiet().nothrow();
+  const leftover = await git(["status", "--porcelain"], worktree);
   if (leftover.stdout.toString().trim().length > 0) return null;
-  const r = await $`git -C ${worktree} branch -f ${wipBranch} HEAD`.quiet().nothrow();
+  const r = await git(["branch", "-f", wipBranch, "HEAD"], worktree);
   return r.exitCode === 0 ? wipBranch : null;
 }
 

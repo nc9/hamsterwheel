@@ -1,3 +1,4 @@
+import { run, whichBin } from "./exec.ts";
 import { RUNNERS, type RunnerName } from "./runner.ts";
 
 export type RunnerProbe = { path: string | null; version: string | null };
@@ -26,11 +27,9 @@ export const detectRunners = async (lookup: RunnerLookup): Promise<DetectedRunne
  * banner is not a reason to refuse to run it.
  */
 export const systemRunnerLookup: RunnerLookup = async (runner) => {
-  const path = Bun.which(runner);
+  const path = whichBin(runner);
   if (!path) return { path: null, version: null };
-  const proc = Bun.spawn([path, "--version"], { stdout: "pipe", stderr: "ignore" });
-  const out = await new Response(proc.stdout).text();
-  await proc.exited;
-  const version = out.trim().split("\n")[0]?.trim();
+  const { stdout } = await run(path, ["--version"]);
+  const version = stdout.trim().split("\n")[0]?.trim();
   return { path, version: version || null };
 };

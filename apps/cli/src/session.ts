@@ -1,10 +1,14 @@
+import { readFile } from "node:fs/promises";
+
 import type { SessionPlan } from "@hamsterwheel/gate";
 import {
   type RunnerOutput,
   type RunnerRole,
   RUNNER_CAPABILITIES,
   buildRunnerArgs,
+  git,
   parseRunnerOutput,
+  run,
 } from "@hamsterwheel/runners";
 import {
   SANDBOX_IMAGE,
@@ -52,16 +56,8 @@ export type SessionOptions = {
 export type SessionResult = RunnerOutput & { timedOut: boolean; stderr: string };
 
 const gitCommonDir = async (worktree: string): Promise<string> => {
-  const proc = Bun.spawn(
-    ["git", "-C", worktree, "rev-parse", "--path-format=absolute", "--git-common-dir"],
-    {
-      stdout: "pipe",
-      stderr: "ignore",
-    },
-  );
-  const out = await new Response(proc.stdout).text();
-  await proc.exited;
-  return out.trim();
+  const r = await git(["rev-parse", "--path-format=absolute", "--git-common-dir"], worktree);
+  return r.stdout.trim();
 };
 
 /** Build the sandboxed `docker run …` argv for a session, failing closed on anything suspect. */
@@ -75,9 +71,7 @@ const sandboxCommand = async (
   // The git dir is mounted in — refuse if its config could carry host creds across or hijack the push
   // away from the injected token.
   const flags = scanGitConfigForCredentials(
-    await Bun.file(`${gitDir}/config`)
-      .text()
-      .catch(() => ""),
+    await readFile(`${gitDir}/config`, "utf8").catch(() => ""),
   );
   if (flags.length)
     throw new Error(
@@ -138,18 +132,12 @@ export const runSession = async (opts: SessionOptions): Promise<SessionResult> =
     );
   }
 
-  const proc = Bun.spawn(argv, { cwd: opts.cwd, env: spawnEnv, stdout: "pipe", stderr: "pipe" });
-  let timedOut = false;
-  const timer = setTimeout(() => {
-    timedOut = true;
-    proc.kill();
-  }, opts.timeoutMs);
-  const [stdout, stderr] = await Promise.all([
-    new Response(proc.stdout).text(),
-    new Response(proc.stderr).text(),
-  ]);
-  await proc.exited;
-  clearTimeout(timer);
-  const parsed = parseRunnerOutput(opts.plan.runner, { stdout, exitCode: proc.exitCode ?? 1 });
+  const [cmd, ...rest] = argv;
+  const { stdout, stderr, exitCode, timedOut } = await run(cmd!, rest, {
+    cwd: opts.cwd,
+    env: spawnEnv,
+    timeoutMs: opts.timeoutMs,
+  });
+  const parsed = parseRunnerOutput(opts.plan.runner, { stdout, exitCode });
   return { ...parsed, stderr, timedOut };
 };

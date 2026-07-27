@@ -20,3 +20,39 @@ jobs:
             echo "── $pkg"
             (cd "$pkg" && bunx tsgo --noEmit)
           done
+
+  # The published artifact must run WITHOUT bun. Source is node-compatible on purpose (no `Bun.*`), and
+  # this job is what keeps it that way: a single `Bun.file`/`Bun.spawn` creeping back in would break every
+  # npm consumer, and would otherwise only surface after a release.
+  node-compat:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: bun install --frozen-lockfile
+
+      - name: no bun-only API in shipped source
+        run: |
+          # Deliberately has NO comment exceptions: the token is kept out of comments too, so this stays a
+          # dumb grep that cannot be fooled by formatting.
+          if grep -rnE "Bun\.[a-zA-Z]|from \"bun\"" --include='*.ts' apps packages | grep -v '\.test\.'; then
+            echo "::error::bun-only API in shipped source — use the node helpers in packages/runners/src/exec.ts"
+            exit 1
+          fi
+
+      - run: bun run build
+
+      - name: CLI runs under node
+        run: |
+          node apps/cli/dist/index.js --version
+          node apps/cli/dist/index.js --help > /dev/null
+
+      - name: npm-installed CLI runs under node
+        run: |
+          PACK_DIR="$(mktemp -d)"
+          cd "$PACK_DIR" && npm init -y > /dev/null
+          npm install --silent "$GITHUB_WORKSPACE/apps/cli"
+          ./node_modules/.bin/hamsterwheel --version

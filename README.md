@@ -74,9 +74,13 @@ MIT © 2026 Nik Cubrilovic
 
 ## Install
 
-Requires [bun](https://bun.sh) — the CLI and packages ship as bun-native TypeScript with no build step, and the `hamsterwheel` bin runs under `#!/usr/bin/env bun`.
+Works under **node or bun** — the published artifact is node-targeted ESM with no bun dependency.
 
 ```bash
-bun add -g hamsterwheel     # or: bunx hamsterwheel <command>
+npm i -g hamsterwheel       # or: bun add -g hamsterwheel
 hamsterwheel doctor
 ```
+
+Needs `git`, `gh` (authenticated, with the `project` scope), and at least one agent CLI on PATH. `docker` only for `--sandbox`. `hamsterwheel doctor` tells you which of those are missing.
+
+The source is written against node APIs on purpose, so the same code runs under both runtimes with no shim. A CI job installs the packed tarball and runs it under node to keep it that way — a stray `Bun.file` would break every npm consumer and would otherwise only surface after a release.

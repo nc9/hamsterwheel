@@ -1,3 +1,4 @@
+import { rm, writeFile } from "node:fs/promises";
 import type { Config } from "@hamsterwheel/config";
 import {
   type GateAction,
@@ -18,7 +19,7 @@ import {
   worktreeAddArgs,
   worktreeHasChanges,
 } from "@hamsterwheel/gate";
-import { RUNNER_CAPABILITIES, contractLine } from "@hamsterwheel/runners";
+import { RUNNER_CAPABILITIES, contractLine, sleep as sleepMs } from "@hamsterwheel/runners";
 
 import { type BoardCtx, clearOwner, comment, setBlocked, setOwner, setStatus } from "./board.ts";
 import { RunFatalError, runFatalReason } from "./errors.ts";
@@ -123,7 +124,7 @@ export const waitForChecks = async (
   gh: Gh,
   cfg: Config,
   prNum: number,
-  sleep: (ms: number) => Promise<void> = Bun.sleep,
+  sleep: (ms: number) => Promise<void> = sleepMs,
   now: () => number = Date.now,
 ): Promise<CiStatus> => {
   const deadline = now() + cfg.ciTimeoutMs;
@@ -307,7 +308,7 @@ export const runRubric = async (
   let schemaPath: string | undefined;
   if (RUNNER_CAPABILITIES[plan.runner].supportsOutputSchema) {
     schemaPath = `${worktree}/.hamsterwheel-rubric.schema.json`;
-    await Bun.write(schemaPath, JSON.stringify(RUBRIC_SCHEMA));
+    await writeFile(schemaPath, JSON.stringify(RUBRIC_SCHEMA));
   }
   const out = await runSession({
     plan,
@@ -319,10 +320,7 @@ export const runRubric = async (
     sandbox: deps.sandbox,
     log: deps.log,
   });
-  if (schemaPath)
-    await Bun.file(schemaPath)
-      .delete()
-      .catch(() => {});
+  if (schemaPath) await rm(schemaPath, { force: true }).catch(() => {});
   if (out.timedOut) throw new Error("rubric session timed out");
   deps.runLog.append("rubric-session", {
     issue: iss.number,

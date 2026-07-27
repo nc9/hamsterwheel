@@ -1,5 +1,5 @@
 import { CONFIG_FILENAME, ConfigError, findConfig, loadConfig } from "@hamsterwheel/config";
-import { detectRunners, systemRunnerLookup } from "@hamsterwheel/runners";
+import { detectRunners, git, systemRunnerLookup, whichBin } from "@hamsterwheel/runners";
 
 import { Gh } from "./gh.ts";
 
@@ -11,7 +11,7 @@ import { Gh } from "./gh.ts";
 export type CheckStatus = "ok" | "warn" | "fail";
 export type Check = { name: string; status: CheckStatus; detail: string };
 
-const has = (bin: string): boolean => Bun.which(bin) !== null;
+const has = (bin: string): boolean => whichBin(bin) !== null;
 
 /** `gh auth status` prints scopes as `- Token scopes: 'gist', 'read:org', 'repo'`. */
 export const parseTokenScopes = (authStatus: string): string[] => {
@@ -25,12 +25,7 @@ export const runChecks = async (opts: { cwd: string; gh?: Gh }): Promise<Check[]
 
   if (!has("git")) checks.push({ name: "git", status: "fail", detail: "not on PATH" });
   else {
-    const proc = Bun.spawn(["git", "-C", opts.cwd, "rev-parse", "--show-toplevel"], {
-      stdout: "pipe",
-      stderr: "ignore",
-    });
-    const root = (await new Response(proc.stdout).text()).trim();
-    await proc.exited;
+    const root = (await git(["rev-parse", "--show-toplevel"], opts.cwd)).stdout.trim();
     checks.push(
       root
         ? { name: "git repo", status: "ok", detail: root }

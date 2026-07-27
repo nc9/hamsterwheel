@@ -14,4 +14,4 @@ export {
   DEFAULT_ALLOWED_TOOLS,
   parseConfig,
 } from "./schema.ts";
-export { CONFIG_FILENAME, loadConfig, findConfig } from "./load.ts";
+export { CONFIG_FILENAME, loadConfig, findConfig, parseConfigText } from "./load.ts";

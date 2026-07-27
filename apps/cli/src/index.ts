@@ -1,4 +1,6 @@
 #!/usr/bin/env bun
+import { pathToFileURL } from "node:url";
+import { realpathSync } from "node:fs";
 
 import {
   CONFIG_FILENAME,
@@ -166,7 +168,23 @@ export const main = async (argv: string[]): Promise<number> => {
   }
 };
 
-if (import.meta.main) {
+// `import.meta.main` is bun-only, and bun's bundler lowers it to a CJS `__require` reference that is
+// undefined in an ESM bundle under node. This check is the portable equivalent: true when this module IS
+// the process entry point, under both runtimes.
+// argv[1] must be REALPATH'd first: npm installs the bin as a symlink in node_modules/.bin, so the raw
+// path is the link while import.meta.url is the target. Comparing them unresolved silently skips main()
+// and exits 0 — a CLI that prints nothing and reports success.
+const isEntryPoint = (): boolean => {
+  const entry = process.argv[1];
+  if (entry === undefined) return false;
+  try {
+    return import.meta.url === pathToFileURL(realpathSync(entry)).href;
+  } catch {
+    return import.meta.url === pathToFileURL(entry).href;
+  }
+};
+
+if (isEntryPoint()) {
   try {
     process.exit(await main(process.argv));
   } catch (e) {

@@ -42,10 +42,14 @@ export const compareIssues = (a: SelectableIssue, b: SelectableIssue): number =>
 /**
  * Dependency refs an issue declares. Only `Depends on #N` / `Blocked by #N` count — a bare `#N` in
  * prose is a cross-reference, not a dependency, and treating it as one would wedge the whole queue.
+ * Refs may follow inline (`Depends on #12, #13`) or as the contract's markdown list
+ * (`## Depends on` above `- #12` lines) — the list markers between the phrase and the refs must
+ * parse too, or every dep declared in the documented format is silently ignored and the loop works
+ * dependents before their dependency exists.
  */
 export const parseDeps = (body: string): number[] => {
   const out = new Set<number>();
-  for (const m of body.matchAll(/(?:depends on|blocked by)\s*:?\s*((?:#\d+[\s,]*)+)/gi))
+  for (const m of body.matchAll(/(?:depends on|blocked by)\s*:?\s*((?:[\s,*+-]*#\d+)+)/gi))
     for (const r of m[1]!.matchAll(/#(\d+)/g)) out.add(Number(r[1]));
   return [...out];
 };

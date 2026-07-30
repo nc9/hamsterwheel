@@ -290,6 +290,15 @@ describe("parseDeps", () => {
   test("dedupes across lines", () =>
     expect(parseDeps("Depends on #5\nblocked by #5, #6")).toEqual([5, 6]));
   test("ignores plain issue refs", () => expect(parseDeps("see #99 for context")).toEqual([]));
+  test("contract markdown list under a heading", () =>
+    expect(parseDeps("## Depends on\n- #1392\n")).toEqual([1392]));
+  test("multi-item markdown list", () =>
+    expect(parseDeps("## Depends on\n- #1374\n- #1375\n")).toEqual([1374, 1375]));
+  test("asterisk list markers", () => expect(parseDeps("Depends on:\n* #12\n* #13")).toEqual([12, 13]));
+  test("list markers do not leak past prose", () =>
+    expect(parseDeps("## Depends on\n- #5\nAlso see #999 for context")).toEqual([5]));
+  test("a heading with no refs matches nothing", () =>
+    expect(parseDeps("## Depends on\nnothing yet, see the epic")).toEqual([]));
 });
 
 describe("compareIssues", () => {

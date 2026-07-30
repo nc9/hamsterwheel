@@ -384,7 +384,9 @@ export const runRubric = async (
     runner: plan.runner,
     model: plan.model,
   });
-  return applyCiToRubric(parseRubricVerdict(out.lastMessage || out.raw), ci.green);
+  // Both candidates, in preference order — NOT `lastMessage || raw`: a garbage-but-non-empty
+  // lastMessage (a lone `}` from the lastLine fallback) would otherwise mask the verdict sitting in raw.
+  return applyCiToRubric(parseRubricVerdict(out.lastMessage, out.raw), ci.green);
 };
 
 /**

@@ -13,6 +13,7 @@ import {
   isExecutionDependent,
   mergeDecision,
   parseRubricVerdict,
+  tryParseRubricVerdict,
   parseWipBranches,
   preserveWorktreeChanges,
   reviewBlockingFindings,
@@ -192,6 +193,48 @@ describe("parseRubricVerdict", () => {
   });
   test("no JSON throws", () => {
     expect(() => parseRubricVerdict("I could not determine a verdict")).toThrow();
+  });
+
+  // The squirrelscan #1127 / #1166 failure: claude's json envelope didn't parse, so lastMessage became
+  // lastLine(raw) — a lone `}`. Non-empty, so `lastMessage || raw` never consulted raw at all.
+  test("a useless-but-non-empty first candidate does not mask a verdict in the second", () => {
+    const raw = 'session log…\n{\n  "pass": true,\n  "criteria": [{"text":"a","met":true}]\n}';
+    const v = parseRubricVerdict("}", raw);
+    expect(v.pass).toBe(true);
+    expect(v.criteria).toHaveLength(1);
+  });
+  test("candidate order is preference order — the first parseable one wins", () => {
+    const v = parseRubricVerdict('{"pass":false}', '{"pass":true}');
+    expect(v.pass).toBe(false);
+  });
+  test("empty candidates are skipped, not treated as a verdict", () => {
+    expect(parseRubricVerdict("", '{"pass":true}').pass).toBe(true);
+  });
+  test("the failure names the shape of every candidate, so it is debuggable", () => {
+    // Bare "no JSON verdict" cost a debugging detour: it can't distinguish empty from prose-only.
+    let msg = "";
+    try {
+      parseRubricVerdict("}", "");
+    } catch (e) {
+      msg = (e as Error).message;
+    }
+    expect(msg).toMatch(/no JSON verdict/);
+    expect(msg).toMatch(/\[0\]/);
+    expect(msg).toMatch(/1B/); // the lone brace, with its length
+    expect(msg).toMatch(/\[1\] empty/);
+  });
+  test("tryParse reports absence instead of throwing", () => {
+    expect(tryParseRubricVerdict("nothing here")).toBeUndefined();
+    expect(tryParseRubricVerdict('{"pass":true}')?.pass).toBe(true);
+  });
+  // A bare `}` at index 0 used to spin forever: lastIndexOf treats a negative fromIndex as 0, so the
+  // scan never advanced past it. That is precisely the lastLine fallback's output, and the hang is
+  // in-process — after the session, so no timeout would have caught it.
+  test("a brace at index 0 terminates instead of looping forever", () => {
+    expect(tryParseRubricVerdict("}")).toBeUndefined();
+    expect(tryParseRubricVerdict("}}}")).toBeUndefined();
+    expect(tryParseRubricVerdict("{")).toBeUndefined();
+    expect(tryParseRubricVerdict("")).toBeUndefined();
   });
 });
 

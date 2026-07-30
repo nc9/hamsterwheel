@@ -4,12 +4,21 @@ export type RubricVerdict = {
 };
 // Parse the last COMPLETE top-level JSON object from a rubric session's output (scan back from the
 // final `}`, brace-match to its `{`, retry earlier if it doesn't parse) — models wrap JSON in prose.
-// pass = every criterion met.
-export const parseRubricVerdict = (text: string): RubricVerdict => {
+// pass = every criterion met. Returns undefined when the text carries no parseable verdict, so callers
+// can try a second candidate string before failing the issue.
+export const tryParseRubricVerdict = (text: string): RubricVerdict | undefined => {
   let obj:
     | { pass?: boolean; criteria?: { text: string; met: boolean; evidence?: string }[] }
     | undefined;
-  for (let end = text.lastIndexOf("}"); end !== -1 && !obj; end = text.lastIndexOf("}", end - 1)) {
+  // `end > 0` guard is load-bearing: lastIndexOf treats a NEGATIVE fromIndex as 0, so at end === 0 the
+  // next search returns 0 again and the scan spins forever. Reachable with the exact text the runner's
+  // lastLine fallback produces for a pretty-printed verdict — a bare `}` — and an in-process hang here
+  // wedges the whole run, with no session timeout left to catch it.
+  for (
+    let end = text.lastIndexOf("}");
+    end !== -1 && !obj;
+    end = end > 0 ? text.lastIndexOf("}", end - 1) : -1
+  ) {
     let depth = 0,
       start = -1;
     for (let i = end; i >= 0; i--) {
@@ -26,10 +35,35 @@ export const parseRubricVerdict = (text: string): RubricVerdict => {
         /* try an earlier } */
       }
   }
-  if (!obj) throw new Error("no JSON verdict in rubric output");
+  if (!obj) return undefined;
   const criteria = Array.isArray(obj.criteria) ? obj.criteria : [];
   const pass = criteria.length > 0 ? criteria.every((c) => c.met === true) : obj.pass === true;
   return { pass, criteria };
+};
+
+/**
+ * Verdict from the FIRST candidate that parses.
+ *
+ * Why more than one candidate: for `claude`, `parseRunnerOutput` falls back to `lastLine(raw)` when the
+ * `--output-format json` envelope doesn't parse — and the last line of a pretty-printed verdict is a lone
+ * `}`. That is non-empty, so a naive `lastMessage || raw` picks the useless one and never looks at `raw`,
+ * which is where the verdict actually is. Observed on squirrelscan #1127 and #1166: both produced good,
+ * CI-green PRs and then blocked on "no JSON verdict", one after the other.
+ *
+ * The failure message carries the shape of what it saw. The bare version cost a full debugging detour
+ * because "no JSON verdict" cannot distinguish an empty session, a truncated one, and a grader that
+ * answered in prose — and the raw output was not recorded anywhere.
+ */
+export const parseRubricVerdict = (...candidates: string[]): RubricVerdict => {
+  for (const text of candidates) {
+    if (!text) continue;
+    const v = tryParseRubricVerdict(text);
+    if (v) return v;
+  }
+  const shapes = candidates
+    .map((c, i) => `[${i}] ${c ? `${c.length}B ending ${JSON.stringify(c.slice(-120))}` : "empty"}`)
+    .join("; ");
+  throw new Error(`no JSON verdict in rubric output — candidates: ${shapes || "none"}`);
 };
 
 // An AC phrased as "tests pass" / "tsgo --noEmit clean" / "lint clean" is EXECUTION-dependent: a

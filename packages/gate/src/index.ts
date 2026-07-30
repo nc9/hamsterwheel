@@ -20,6 +20,7 @@ export {
   type RubricVerdict,
   EXECUTION_DEPENDENT_RE,
   parseRubricVerdict,
+  tryParseRubricVerdict,
   isExecutionDependent,
   applyCiToRubric,
 } from "./rubric.ts";

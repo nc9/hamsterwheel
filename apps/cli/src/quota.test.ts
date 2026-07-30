@@ -6,9 +6,8 @@ import { describe, expect, test } from "bun:test";
 import { runFatalReason } from "./errors.ts";
 import { preflightProblems } from "./preflight.ts";
 import {
-  BOARD_QUERY_COST,
   DEFAULT_GRAPHQL_FLOOR,
-  PER_CANDIDATE_COST,
+  GRAPHQL_WARN_AT,
   PIPELINE_COST,
   type RateLimits,
   estimateQueueBuildCost,
@@ -41,16 +40,29 @@ describe("formatReset", () => {
 });
 
 describe("cost model", () => {
-  test("queue build scales with the Ready count, since enrichItem pays per item", () => {
-    expect(estimateQueueBuildCost(0)).toBe(BOARD_QUERY_COST);
-    expect(estimateQueueBuildCost(50)).toBe(BOARD_QUERY_COST + 50 * PER_CANDIDATE_COST);
-    // A negative count is nonsense input, not a discount.
-    expect(estimateQueueBuildCost(-10)).toBe(BOARD_QUERY_COST);
+  test("startup is dominated by TOTAL board size, not by the Ready count", () => {
+    // The bug this encodes: costing only the Ready items under-predicted a real run by ~35x.
+    expect(estimateQueueBuildCost(415, 14)).toBeGreaterThan(1000);
+    // Same tiny queue, big board — still expensive, because listItems reads every item.
+    expect(estimateQueueBuildCost(415, 1)).toBeGreaterThan(estimateQueueBuildCost(20, 14));
   });
-  test("a run costs the queue build plus at least one pipeline", () => {
-    expect(estimateRunCost(50)).toBe(estimateQueueBuildCost(50) + PIPELINE_COST);
-    expect(estimateRunCost(50, 3)).toBe(estimateQueueBuildCost(50) + 3 * PIPELINE_COST);
-    expect(estimateRunCost(10, 0)).toBe(estimateQueueBuildCost(10) + PIPELINE_COST);
+  test("matches the measured 415-item run within 10%", () => {
+    // Observed: 1982 → 731 = 1251 points for startup on a 415-item board with 14 Ready.
+    const est = estimateQueueBuildCost(415, 14);
+    expect(Math.abs(est - 1251) / 1251).toBeLessThan(0.1);
+  });
+  test("negative or zero counts are nonsense input, not a discount", () => {
+    expect(estimateQueueBuildCost(0, 0)).toBe(0);
+    expect(estimateQueueBuildCost(-10, -5)).toBe(0);
+  });
+  test("a run costs the startup plus at least one pipeline", () => {
+    expect(estimateRunCost(100, 10)).toBe(estimateQueueBuildCost(100, 10) + PIPELINE_COST);
+    expect(estimateRunCost(100, 10, 3)).toBe(estimateQueueBuildCost(100, 10) + 3 * PIPELINE_COST);
+    expect(estimateRunCost(100, 10, 0)).toBe(estimateQueueBuildCost(100, 10) + PIPELINE_COST);
+  });
+  test("the preflight floor covers the measured board, so a doomed run cannot start", () => {
+    // The old floor was 128 — a run with 200 points left passed preflight and died mid-build.
+    expect(DEFAULT_GRAPHQL_FLOOR).toBeGreaterThan(1251);
   });
 });
 
@@ -108,9 +120,22 @@ describe("quotaVerdict", () => {
   });
 
   test("low-but-sufficient warns without blocking", () => {
-    const v = verdict(limits({ graphql: { remaining: 600 } }));
+    const v = verdict(limits({ graphql: { remaining: 1600 } }));
     expect(v.level).toBe("warn");
     expect(v.exhausted).toBeUndefined();
+  });
+
+  test("the warn band sits above the floor, or it is unreachable", () => {
+    expect(GRAPHQL_WARN_AT).toBeGreaterThan(DEFAULT_GRAPHQL_FLOOR);
+  });
+
+  test("below the startup floor, the warn names the NEXT run as the constraint", () => {
+    // Production wording bug: at 731 left it said "room for roughly 36 more of these", dividing by the
+    // caller's floor. The real constraint is that a fresh run cannot read the board at all.
+    const v = verdict(limits({ graphql: { remaining: 731 } }), PIPELINE_COST);
+    expect(v.level).toBe("warn");
+    expect(v.detail).toMatch(/fresh run needs/i);
+    expect(v.detail).not.toMatch(/more of these/);
   });
 
   test("the floor is what decides, so the pre-claim check passes where preflight would fail", () => {
@@ -154,7 +179,7 @@ number = 1
 
   test("a warn or an unknown quota does not block the start", () => {
     expect(
-      preflightProblems({ ...base, quota: verdict(limits({ graphql: { remaining: 600 } })) }),
+      preflightProblems({ ...base, quota: verdict(limits({ graphql: { remaining: 1600 } })) }),
     ).toEqual([]);
     expect(preflightProblems({ ...base, quota: verdict(null) })).toEqual([]);
     expect(preflightProblems(base)).toEqual([]);

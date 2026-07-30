@@ -20,35 +20,45 @@ export type RateWindow = { limit: number; remaining: number; used: number; reset
 export type RateLimits = { graphql: RateWindow; core: RateWindow };
 
 /**
- * GraphQL cost, derived from the calls the loop actually makes. Tunable estimates that err high, NOT
- * measurements — the point is to be right about the order of magnitude, since the failure being avoided
- * is a run that dies holding a claim.
+ * GraphQL cost, front-loaded into startup and dominated by TOTAL BOARD SIZE — not by how many issues are
+ * Ready, and not by how much work gets done.
  *
- * The cost is front-loaded, which is why the two phases are estimated separately: `buildQueue` runs ONCE
- * per invocation (it used to run per tick, which is what drained a 385-item board after two claims), and
- * it spends `enrichItem`'s `gh issue view` plus an `isEpic` query on every READY item — not just the one
- * being worked. After that, each issue costs only its own pipeline.
+ * MEASURED, not guessed: one `run` startup on a 415-item board with 14 Ready consumed 1251 points
+ * (1982 → 731), i.e. ~3.0 per board item. The first version of this model costed only the Ready items and
+ * predicted 36, so its floor would have cheerfully started a run with 200 points left that then died
+ * during the queue build — the exact failure the check exists to prevent.
+ *
+ * The reason is `listItems`: it pulls EVERY item on the board with its field values, so a board that has
+ * accumulated hundreds of Done items is expensive to read even when the queue is tiny. `enrichItem`'s
+ * per-Ready `gh issue view` and `isEpic`'s sub-issue query are the secondary term.
  */
+export const PER_BOARD_ITEM_COST = 3;
 export const PER_CANDIDATE_COST = 2;
-export const BOARD_QUERY_COST = 8;
 /** Claim, board transitions, the re-read before claiming, PR lookups and the close comment. */
 export const PIPELINE_COST = 20;
 
-/** One-time cost of ranking the queue with `readyCount` items in Ready. */
-export const estimateQueueBuildCost = (readyCount: number): number =>
-  BOARD_QUERY_COST + Math.max(0, readyCount) * PER_CANDIDATE_COST;
+/** One-time startup cost: read the whole board, then enrich and rank the Ready subset. */
+export const estimateQueueBuildCost = (boardItems: number, readyCount: number): number =>
+  Math.max(0, boardItems) * PER_BOARD_ITEM_COST + Math.max(0, readyCount) * PER_CANDIDATE_COST;
 
-/** What starting a run needs: rank the queue, then carry one issue to Done. */
-export const estimateRunCost = (readyCount: number, issues = 1): number =>
-  estimateQueueBuildCost(readyCount) + Math.max(1, issues) * PIPELINE_COST;
+/** What starting a run needs: read+rank the board, then carry `issues` of them to Done. */
+export const estimateRunCost = (boardItems: number, readyCount: number, issues = 1): number =>
+  estimateQueueBuildCost(boardItems, readyCount) + Math.max(1, issues) * PIPELINE_COST;
 
 /**
- * Floor for preflight, which runs before the queue exists. Assumes a ~50-item board; the pre-claim check
- * inside the run uses PIPELINE_COST instead, because by then the queue is already built and paid for.
+ * Floor for preflight, which runs before either count is known. Calibrated to comfortably cover the
+ * measured 415-item board; on a small board this is stricter than necessary, which is the correct
+ * direction — it costs a wait, whereas being too low costs a run that dies holding a claim.
+ *
+ * The pre-claim check inside the run uses PIPELINE_COST instead, because by then the board read and the
+ * queue ranking are already paid for and only this issue's own pipeline is still owed.
  */
-export const DEFAULT_GRAPHQL_FLOOR = estimateRunCost(50);
-/** Headroom below which the operator should know, even though the run can still proceed. */
-export const GRAPHQL_WARN_AT = 1000;
+export const DEFAULT_GRAPHQL_FLOOR = estimateRunCost(450, 50);
+/**
+ * Headroom below which the operator should know, even though the current call can still proceed. Must sit
+ * ABOVE `DEFAULT_GRAPHQL_FLOOR` or the band is unreachable — everything below the floor already fails.
+ */
+export const GRAPHQL_WARN_AT = 2000;
 /** REST `core` funds PR/issue/CI reads. Cheaper per tick than GraphQL, so a lower floor. */
 export const CORE_FLOOR = 100;
 
@@ -104,7 +114,14 @@ export const quotaVerdict = (
   if (graphql.remaining < GRAPHQL_WARN_AT)
     return {
       level: "warn",
-      detail: `GraphQL quota ${describe(graphql, opts.nowSeconds)} — room for roughly ${Math.floor(graphql.remaining / Math.max(1, floor))} more of these.`,
+      // Below the startup floor the binding constraint is no longer THIS call — it is that the next run
+      // cannot even read the board. Say that, rather than dividing by a floor the caller chose, which
+      // produced the misleading "room for 36 more" at 731 points left.
+      detail:
+        `GraphQL quota ${describe(graphql, opts.nowSeconds)}` +
+        (graphql.remaining < DEFAULT_GRAPHQL_FLOOR
+          ? ` — enough to finish in-flight work, but below the ~${DEFAULT_GRAPHQL_FLOOR} a fresh run needs just to read the board.`
+          : " — getting low."),
     };
   return {
     level: "ok",

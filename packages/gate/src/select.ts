@@ -60,5 +60,9 @@ export const hasAcceptanceCriteria = (body: string, heading = "Acceptance Criter
   return new RegExp(`#{1,6}\\s*${escaped}`, "i").test(body) && /-\s*\[[ x]\]/.test(body);
 };
 
-/** `epic(...)`-titled issues are containers — the loop works their sub-issues, never the epic itself. */
-export const isEpicTitle = (title: string): boolean => /^epic\(/i.test(title);
+/**
+ * `epic(...)` / `epic: ...`-titled issues are containers — the loop works their sub-issues, never the
+ * epic itself. Both spellings occur in real backlogs, and a container that slips through gets claimed
+ * as an ordinary work item, so match the intent, not one house style.
+ */
+export const isEpicTitle = (title: string): boolean => /^epic\s*[:(]/i.test(title);

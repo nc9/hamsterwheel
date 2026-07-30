@@ -333,6 +333,10 @@ describe("label ranks + issue contract", () => {
   });
   test("epic titles are containers", () => {
     expect(isEpicTitle("epic(billing): rework credits")).toBe(true);
+    expect(isEpicTitle("epic: content marketing pages")).toBe(true);
+    expect(isEpicTitle("Epic: multi-channel campaigns")).toBe(true);
     expect(isEpicTitle("fix(billing): epic bug")).toBe(false);
+    expect(isEpicTitle("epics: a word that merely starts with epic")).toBe(false);
+    expect(isEpicTitle("an epic: not at the start")).toBe(false);
   });
 });

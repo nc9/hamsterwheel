@@ -135,6 +135,41 @@ describe("reviewBlockingFindings", () => {
     expect(reviewBlockingFindings(body)).toEqual([]); // default pattern doesn't match this format
     expect(reviewBlockingFindings(body, /P1-blocker/i).length).toBe(1);
   });
+
+  // The sign-off enumerates the severities it did NOT find, so a naive per-line severity scan reads a
+  // clean review as blocking. Verbatim from squirrelscan/repo#1402, a green PR the gate would have parked.
+  test("a clean sign-off naming the severities is NOT a finding", () => {
+    expect(
+      reviewBlockingFindings(
+        "- No application query changes, so no behavioral risk.\n" +
+          "No (critical), (high), (medium), (low), or (nit) issues to flag.",
+      ),
+    ).toEqual([]);
+  });
+  test("other clean-sign-off phrasings are also discounted", () => {
+    expect(reviewBlockingFindings("No (high) or (critical) issues found.")).toEqual([]);
+    expect(reviewBlockingFindings("There are no (critical) concerns in this diff.")).toEqual([]);
+    expect(reviewBlockingFindings("No blockers: nothing at (high) severity.")).toEqual([]);
+  });
+
+  // The negation discount must not become a loophole — these all still have to block.
+  test("a real finding survives even when the line contains 'no'", () => {
+    expect(
+      reviewBlockingFindings("- (high) `a.ts:1` — there is no bound on this loop, so it can hang"),
+    ).toHaveLength(1);
+  });
+  test("a finding-position marker beats the negation, even mixed on one line", () => {
+    expect(
+      reviewBlockingFindings("- (high) unescaped input; no other issues in this file"),
+    ).toHaveLength(1);
+    expect(
+      reviewBlockingFindings("**(critical)** auth bypass — no findings elsewhere"),
+    ).toHaveLength(1);
+  });
+  test("a negation in a LATER sentence does not clear an earlier finding", () => {
+    // `.` ends the negation's sentence scope, so the severity and the "no ... issues" are separate claims.
+    expect(reviewBlockingFindings("Found a (high) severity bug. No other issues.")).toHaveLength(1);
+  });
 });
 
 describe("parseRubricVerdict", () => {

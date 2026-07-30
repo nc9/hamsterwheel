@@ -26,13 +26,44 @@ export const matchHumanRules = (
 // `blockingRe` is overridable so a different review format can supply its own severity pattern.
 export const BLOCKING_REVIEW_RE =
   /\(\s*(high|critical)\s*\)|🔴|\[(critical|high)\]|severity:\s*(high|critical)/i;
+
+/**
+ * A reviewer's CLEAN sign-off names the severities it did not find, so a severity-marker scan hits it:
+ *
+ *   No (critical), (high), (medium), (low), or (nit) issues to flag.
+ *
+ * That line is verbatim from a real review (squirrelscan/repo#1402, a green PR) and it made the gate
+ * report one blocking finding on a review that had none. "Err toward blocking" is the right instinct for
+ * an AMBIGUOUS line, but this one is not ambiguous — it is the reviewer saying the opposite — and the
+ * cost is not one human glance: every clean PR whose review ends this way parks instead of merging,
+ * which quietly turns an autonomous loop back into a manual one.
+ *
+ * Deliberately narrow, and judged PER SENTENCE, not per line: "Found a (high) severity bug. No other
+ * issues." is one line carrying both a finding and a negation, and the finding has to win. A sentence is
+ * only discounted when BOTH hold:
+ *   1. it reads as a negation — `no` … `issues`/`findings`/`concerns`/`blockers`/`problems` — so a real
+ *      finding that merely contains the word "no" ("there is no bound on this loop") survives;
+ *   2. it does NOT open with a severity marker in finding position (`- (high) …`, `**(high)** …`), which
+ *      is how actual findings are written — that check wins, so a single-sentence mix like
+ *      "- (high) unescaped input; no other issues" is still blocking.
+ */
+const SIGNOFF_NEGATION_RE = /\bno\b[^.!?]*\b(issues?|findings?|concerns?|blockers?|problems?)\b/i;
+const FINDING_POSITION_RE = /^\s*(?:[-*+]\s*)?(?:\*\*)?\(\s*(high|critical)\s*\)/i;
+
+const isCleanSignoff = (sentence: string): boolean =>
+  SIGNOFF_NEGATION_RE.test(sentence) && !FINDING_POSITION_RE.test(sentence);
+
+// Split on sentence-ending punctuation FOLLOWED BY SPACE, so `a.ts:1`, `v1.2` and `e.g.` stay intact —
+// a path fragmented mid-finding would strand the severity marker in its own pseudo-sentence.
+const sentences = (line: string): string[] => line.split(/(?<=[.!?])\s+/);
+
 export const reviewBlockingFindings = (
   body: string,
   blockingRe: RegExp = BLOCKING_REVIEW_RE,
 ): string[] =>
   body
     .split("\n")
-    .filter((l) => blockingRe.test(l))
+    .filter((l) => sentences(l).some((s) => blockingRe.test(s) && !isCleanSignoff(s)))
     .map((l) => l.trim().slice(0, 140));
 
 /**

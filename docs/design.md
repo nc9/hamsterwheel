@@ -96,6 +96,16 @@ advanced, and destroyed a hand-curated Ready queue in under a minute. The securi
 correct; treating an environment error as an implement failure was not. Every such precondition is also
 checked ONCE in a preflight, so the run refuses to start rather than draining the queue.
 
+**API quota is run-fatal, and disguised.** GitHub's GraphQL and REST `core` budgets are separate per-token
+pools, and Projects v2 is GraphQL-only — so board traffic drains `graphql` while `core` stays full. The
+loop then fails at `gh project field-list` with every `gh issue`/`gh pr` command still working, which reads
+as a misconfigured board rather than a wall that clears itself on a timer. Cost is front-loaded and scales
+with the QUEUE rather than the work (`enrichItem` is one `gh issue view` per Ready item), which is why
+`buildQueue` runs once per invocation. `gh api rate_limit` reads both pools for free, so the check is
+unconditional: `doctor` reports both, `preflight` refuses an exhausted start, each claim is preceded by a
+re-check so running dry stops cleanly instead of dying mid-pipeline holding a claim, and rate-limit errors
+are pattern-classified run-fatal so a quota wall cannot Block every item in turn.
+
 - CI red after N fix rounds → Blocked: ci-red.
 - Unresolvable merge conflict → one rebase attempt; still red → Blocked: needs-decision.
 - Session crash/timeout → reap: no PR → salvage + back to Ready; PR open → stays In Review (resumable).

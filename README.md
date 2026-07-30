@@ -22,7 +22,7 @@ npm i -g hamsterwheel       # or: bun add -g hamsterwheel
 hamster doctor
 ```
 
-Needs `git`, `gh` (authenticated, with the `project` scope), and at least one agent CLI on PATH (`claude`, `codex`, or `opencode`). `docker` only for `--sandbox`. `hamster doctor` tells you which of those are missing.
+Needs `git`, `gh` (authenticated, with the `project` scope), and at least one agent CLI on PATH (`claude`, `codex`, or `opencode`). `docker` only for `--sandbox`. `hamster doctor` tells you which of those are missing, and reports your GitHub API quota — board traffic is GraphQL-only, and an exhausted GraphQL budget fails at the board read while every `gh issue`/`gh pr` command keeps working, which reads as a broken board rather than a wall that clears on a timer.
 
 Install the operator skill so your agent knows how to adopt and drive the loop:
 

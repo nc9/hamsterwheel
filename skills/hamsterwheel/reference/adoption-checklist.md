@@ -16,7 +16,7 @@ Observed: a first run claimed an issue, built the worktree, and died on `scripts
 
 ## 2. Prove the blocking-review arm actually fires — **SILENT, and it defeats the gate**
 
-Skip this only if you run `review.mode = "off"`. It applies equally under `required` and the default `optional`: the mode decides whether a review must *exist*, never what an existing review is allowed to say.
+Skip this only if you run `review.mode = "off"`. It applies equally under `required` and the default `optional`: the mode decides whether a review must _exist_, never what an existing review is allowed to say.
 
 The gate greps your review bot's comment for severity markers (`(high)`, `(critical)`, `🔴`, `severity: high`). Most review workflows ask for freeform prose and never emit them. Then `blockingReview` is always 0, and a review full of real problems reads as approval.
 
@@ -61,7 +61,7 @@ Under the default `optional`, that check does not run — by design, because dem
 
 If you build your own gate, take the principle rather than the code: **absence of a signal is not approval.** Either require positive evidence that the check you depend on ran against the artifact you are about to ship, or decide deliberately that the check is not load-bearing. What you must not do is treat its silence as a pass.
 
-Independent of mode, a `CHANGES_REQUESTED` review from any login blocks. That is the one review signal a human reliably produces without being told about severity tags, and hamsterwheel reads the review *state* rather than its prose. `off` does not read it, since it makes no review calls at all.
+Independent of mode, a `CHANGES_REQUESTED` review from any login blocks. That is the one review signal a human reliably produces without being told about severity tags, and hamsterwheel reads the review _state_ rather than its prose. `off` does not read it, since it makes no review calls at all.
 
 ## 3. Check the criteria heading matches, literally — **SILENT**
 
@@ -90,6 +90,16 @@ gh api "repos/OWNER/REPO/actions/runs?event=pull_request&status=success&per_page
 Include the review workflow if it reports as a check — the gate waits on the whole rollup. Too high is not free: the loop is serial, so every minute waiting on a PR that will never go green is a minute the next issue doesn't start.
 
 One sampling trap: a run list filtered only by workflow name can include runs where path filters skipped the real matrix, making CI look faster than it is. Sanity check against a run you know exercised everything.
+
+## 5b. Know what your board size costs in GraphQL
+
+Ranking the queue spends a `gh issue view` per **Ready** item plus a sub-issue query per candidate, against a 5,000-point-per-hour GraphQL budget that Projects v2 shares. A 50-item Ready queue costs ~100 points per invocation; promoting 50 issues to Ready costs another 50 mutations.
+
+```bash
+gh api rate_limit --jq '.resources | {graphql, core}'
+```
+
+`hamster doctor` now reports both pools with a reset countdown, `preflight` refuses to start when GraphQL is too low to finish an issue, and each claim is preceded by a free re-check. The trap this closes: REST `core` stays healthy while `graphql` is empty, so the loop fails at the board read and every `gh issue`/`gh pr` command keeps working — which reads as a misconfigured board rather than a wall that clears itself.
 
 ## 6. Know what `[scripts]` `setup` can't do
 

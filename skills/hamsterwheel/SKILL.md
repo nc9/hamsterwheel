@@ -155,11 +155,11 @@ Never auto-merged regardless of how green things look: anything matching a `[[hu
 
 CI is the essential gate; a PR-comment review is defence in depth. The reviewing may well have happened locally, and plenty of repos have no review bot at all.
 
-| mode                 | behaviour                                                                            |
-| -------------------- | ------------------------------------------------------------------------------------ |
-| `optional` (default) | a review covering the head is honoured if present; its absence is not a blocker      |
-| `required`           | a review covering the head **must** exist, else `needs-decision`                     |
-| `off`                | reviews are never fetched — no API calls, no review signal of any kind               |
+| mode                 | behaviour                                                                       |
+| -------------------- | ------------------------------------------------------------------------------- |
+| `optional` (default) | a review covering the head is honoured if present; its absence is not a blocker |
+| `required`           | a review covering the head **must** exist, else `needs-decision`                |
+| `off`                | reviews are never fetched — no API calls, no review signal of any kind          |
 
 `optional` is the default deliberately. `required` reads safer and is what wedges a fresh adoption: a repo with no review workflow still gets the `claude[bot]` default for `review.bot`, so nothing ever matches, every PR parks, and the printed reason ("no review of the current head") is indistinguishable from a review bot that is merely broken. Under `optional` the gate is still CI plus the adversarial rubric grader, which never wrote the code. `hamster doctor` fails the `review gate` check when `mode = required` and the configured reviewer has never posted on the repo — that turns the wedge into a diagnosis.
 
@@ -169,7 +169,7 @@ A `[[human]]` rule has a `name` and fires on changed **paths** (case-insensitive
 
 **`blockingReview` is the arm most likely to be silently broken in your repo.** It greps your review bot's comment for severity markers. If your review workflow asks for freeform prose, no finding ever carries a marker, `blockingReview` is always 0, and the gate reads every review — including one flagging real problems — as approval. Verify it empirically before trusting it; `reference/adoption-checklist.md` has the exact test.
 
-That verification matters just as much under `optional` as under `required`, and it is easy to assume otherwise. `optional` relaxes whether a review must *exist*; it does not relax what a review that does exist is allowed to say. A reviewer emitting untagged prose is equally invisible in both modes.
+That verification matters just as much under `optional` as under `required`, and it is easy to assume otherwise. `optional` relaxes whether a review must _exist_; it does not relax what a review that does exist is allowed to say. A reviewer emitting untagged prose is equally invisible in both modes.
 
 ## When something goes wrong
 
@@ -180,6 +180,7 @@ That verification matters just as much under `optional` as under `required`, and
 | everything blocked at once                          | a run-fatal precondition leaked into per-issue blame; check preflight, then `reconcile`   |
 | item stuck In Progress with nothing running         | `reconcile`                                                                               |
 | burst of instant failures, ~1/min, tiny transcripts | session quota exhaustion, not bugs — see reference                                        |
+| board reads fail but `gh issue`/`gh pr` work fine   | GraphQL quota, not a broken board: `hamster doctor` prints both pools and the reset time  |
 | driver died mid-gate with a PR open                 | do **not** re-run that issue; finish the gate by hand                                     |
 
 A failure about **this** issue blocks this issue. A precondition that fails identically for every item — docker, gh auth, a missing runner binary, a broken setup script — is **run-fatal**: abort, release the claim, touch nothing else. If a whole curated queue went Blocked in under a minute, that taxonomy is what broke, not the sandbox.

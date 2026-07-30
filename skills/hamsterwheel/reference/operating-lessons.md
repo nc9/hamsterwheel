@@ -111,7 +111,17 @@ Related hazard: never `git stash drop` after a conflicted `git stash pop`. The s
 
 ## Quota
 
-### Exhaustion looks exactly like a catastrophic night
+### API quota exhaustion looks like a broken board
+
+Two separate per-token pools, and only one of them funds the loop's control plane. Projects v2 is GraphQL-only, so board traffic drains `graphql` while REST `core` sits nearly untouched. The symptom is a failure at `gh project field-list` while every `gh issue` and `gh pr` command still works perfectly, which reads as "my config points at the wrong board", not "wait forty minutes".
+
+Measured: building a 53-item Ready queue (one board mutation per item) plus a handful of `plan` runs consumed 4,942 of 5,000 GraphQL points. REST core was at 4,998 the whole time.
+
+The cost is front-loaded and scales with the queue, not the work: `buildQueue` spends a `gh issue view` **per Ready item** plus a sub-issue query per candidate, so a 50-item board costs ~100 points every time the queue is ranked. That is why the queue is built once per invocation and not per tick — per-tick rebuilding exhausted a 385-item board after two claims.
+
+`gh api rate_limit` reads both pools and **is itself free**, so there is no reason to ration the check. `hamster doctor` reports both, `preflight` refuses to start an exhausted run, and a check before each claim stops a run cleanly rather than dying mid-pipeline holding a claim. Rate-limit errors are classified run-fatal: unclassified, a quota wall blocks every item in the queue in turn for an account-wide condition.
+
+### Session quota exhaustion looks exactly like a catastrophic night
 
 Headless sessions can share the operator's subscription quota — no separate API key means the same limit as interactive use. Roughly ten large-model implement sessions per wave was the practical ceiling.
 
@@ -136,7 +146,7 @@ Finish the gate manually, in the loop's exact order: criteria vs diff → CI gre
 Everything below applies once you run more than one lane. The serial loop avoids all of it.
 
 - **Idle agents don't poll CI.** They go quiet after opening a PR. Never re-ping an idle agent; reconcile from repo state — did the branch sha move, does a PR exist, are checks green.
-- **N lanes exhaust the GraphQL quota** (~20 minute lockout). GraphQL and REST "core" are separate per-token pools and `gh api rate_limit` reads both for free. Everything PR-shaped has a REST equivalent: REST-first for PR ops, and batch the Projects v2 board mutations (GraphQL-only) into start and end sweeps.
+- **N lanes exhaust the GraphQL quota** (~20 minute lockout) — the same wall described under Quota above, reached N times faster. Everything PR-shaped has a REST equivalent, and REST is a separate pool: REST-first for PR ops, and batch the Projects v2 board mutations (GraphQL-only) into start and end sweeps.
 - **`cancel-in-progress` is correct for tests and catastrophic for deploys.** Six back-to-back merges each cancelled the previous run, so five intermediate deploy jobs never executed and five services silently ran pre-batch code. If a merge has side effects, it cannot share a cancellable concurrency group with CI.
 - **Parallel branches off one base collide on generated sequence numbers** (migration files being the classic). Whoever merges second regenerates. Never hand-renumber.
 - **Stacked PRs:** merging a parent with `--delete-branch` auto-closes its children. Merge children first, or retarget before the parent merges.

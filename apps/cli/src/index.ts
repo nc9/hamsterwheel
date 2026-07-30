@@ -30,6 +30,7 @@ import { Gh } from "./gh.ts";
 import { commandHelp, globalHelp } from "./help.ts";
 import { init } from "./init.ts";
 import { preflight } from "./preflight.ts";
+import { fetchRateLimits, quotaVerdict } from "./quota.ts";
 import { runPrune } from "./prune.ts";
 import { release, renderRelease } from "./release.ts";
 import { type RunLog, createRunLog, makeRunId } from "./runlog.ts";
@@ -240,7 +241,14 @@ export const main = async (argv: string[]): Promise<number> => {
           );
         // Refuse to START on a precondition that would fail identically for every item. Discovering it
         // per-issue is how a whole curated Ready queue got burned into Blocked in under a minute.
-        if (args.execute) preflight({ cfg, sandbox: args.sandbox });
+        // The quota read is free, so it costs nothing to fold into the same refusal.
+        if (args.execute) {
+          const quota = quotaVerdict(await fetchRateLimits(gh), {
+            nowSeconds: Math.floor(Date.now() / 1000),
+          });
+          if (quota.level === "warn") log(`! quota: ${quota.detail}`);
+          preflight({ cfg, sandbox: args.sandbox, quota });
+        }
         if (args.execute) await runTriagePasses(deps);
         const summarize = () => {
           const count = (e: string) => events.filter((x) => x["event"] === e).length;

@@ -11,6 +11,7 @@ import {
 import { detectRunners, git, systemRunnerLookup, whichBin } from "@hamsterwheel/runners";
 
 import { Gh } from "./gh.ts";
+import { fetchRateLimits, quotaVerdict } from "./quota.ts";
 import {
   ENV_FILE_PATTERNS,
   WORKTREE_INCLUDE_FILE,
@@ -112,6 +113,18 @@ export const reviewReadiness = async (gh: Gh, cfg: Config): Promise<Check> => {
       };
 };
 
+/**
+ * API quota, reported for both pools.
+ *
+ * Worth a named check because exhaustion is MISREAD: Projects v2 is GraphQL-only, so board traffic drains
+ * `graphql` while REST `core` stays full — every `gh issue`/`gh pr` command keeps working, and the loop
+ * dies on `gh project field-list`, which reads as a broken board rather than a wall that clears itself.
+ */
+export const quotaReadiness = async (gh: Gh): Promise<Check> => {
+  const v = quotaVerdict(await fetchRateLimits(gh), { nowSeconds: Math.floor(Date.now() / 1000) });
+  return { name: "api quota", status: v.level, detail: v.detail };
+};
+
 export const runChecks = async (opts: { cwd: string; gh?: Gh }): Promise<Check[]> => {
   const gh = opts.gh ?? new Gh();
   const checks: Check[] = [];
@@ -150,6 +163,7 @@ export const runChecks = async (opts: { cwd: string; gh?: Gh }): Promise<Check[]
         status: "ok",
         detail: `authenticated (scopes: ${scopes.join(", ") || "unknown"})`,
       });
+      checks.push(await quotaReadiness(gh));
       // Projects v2 is GraphQL-only and needs its own scope; without it every board mutation 403s.
       checks.push(
         scopes.length === 0 || scopes.includes("project")

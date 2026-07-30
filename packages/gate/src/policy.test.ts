@@ -294,7 +294,8 @@ describe("parseDeps", () => {
     expect(parseDeps("## Depends on\n- #1392\n")).toEqual([1392]));
   test("multi-item markdown list", () =>
     expect(parseDeps("## Depends on\n- #1374\n- #1375\n")).toEqual([1374, 1375]));
-  test("asterisk list markers", () => expect(parseDeps("Depends on:\n* #12\n* #13")).toEqual([12, 13]));
+  test("asterisk list markers", () =>
+    expect(parseDeps("Depends on:\n* #12\n* #13")).toEqual([12, 13]));
   test("list markers do not leak past prose", () =>
     expect(parseDeps("## Depends on\n- #5\nAlso see #999 for context")).toEqual([5]));
   test("a heading with no refs matches nothing", () =>

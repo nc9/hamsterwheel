@@ -15,9 +15,11 @@ import {
   setBlocked,
   setStatus,
 } from "./board.ts";
+import { RunFatalError } from "./errors.ts";
 import type { Gh } from "./gh.ts";
 import { buildQueue, enrichItem, isEpic, type LoopIssue, type QueueSkip } from "./issues.ts";
 import { type LoopDeps, claimAndRun } from "./pipeline.ts";
+import { PIPELINE_COST, fetchRateLimits, quotaVerdict } from "./quota.ts";
 
 /**
  * Every read-style command returns a structured report and renders it separately, so `--json` emits the
@@ -367,6 +369,23 @@ export const workQueue = async (
       continue;
     }
     next.owner = live.owner;
+    // Last free thing before the claim: is there enough GraphQL budget left to carry this issue to Done?
+    // Running out MID-pipeline is the expensive shape — the item sits In Progress with a claim and maybe
+    // an open PR, and the next run has to reconcile it. Checking here costs nothing (`rate_limit` is not
+    // itself rate-limited) and turns that into a clean stop with the queue intact.
+    if (opts.execute) {
+      const q = quotaVerdict(await fetchRateLimits(gh), {
+        nowSeconds: Math.floor(Date.now() / 1000),
+        // The queue is already built and paid for, so only this issue's own pipeline is still owed.
+        graphqlFloor: PIPELINE_COST,
+      });
+      if (q.exhausted)
+        throw new RunFatalError(
+          `api-quota (${q.exhausted}) — stopping before claiming #${next.number}: ${q.detail}`,
+          "nothing was claimed; relaunch after the reset and the queue picks up where it left off",
+        );
+      if (q.level === "warn") log(`  ! quota: ${q.detail}`);
+    }
     // A run-fatal error would recur identically on every remaining item, so it aborts the run instead of
     // walking the queue and blocking each item in turn. claimAndRun has already released its claim.
     await claimAndRun(loopDeps, next, opts.execute);

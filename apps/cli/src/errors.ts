@@ -41,6 +41,15 @@ const RUN_FATAL_PATTERNS: [string, RegExp][] = [
     /board field "[^"]*" not found|status option "[^"]*" not on the board|project .* not found/,
   ],
   ["setup-script", /scripts\.setup "[^"]*" failed/],
+  // API quota. GraphQL exhaustion surfaces as `GraphQL: API rate limit exceeded for user ID N` on a 200
+  // response, so none of the HTTP-status patterns above catch it; secondary limits arrive as 403/429 with
+  // their own wording. Unclassified, this is issue-fatal — and a quota wall would then Block each item in
+  // the queue in turn for an account-wide condition, which is the exact shape of the sandbox-token
+  // incident this taxonomy exists for.
+  [
+    "api-quota",
+    /API rate limit exceeded|secondary rate limit|\bHTTP 429\b|rate limit.*(exceeded|exhausted)/i,
+  ],
   // CI that never RAN. GitHub refuses to schedule jobs when the Actions spending limit is hit and
   // reports them `conclusion: failure` with zero steps in under a second — indistinguishable from a
   // genuine red at the rollup level. Left unclassified, the gate reads it as ci-red and blocks every

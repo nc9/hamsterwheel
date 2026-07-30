@@ -3,6 +3,7 @@ import { resolveSandboxEnv } from "@hamsterwheel/sandbox";
 import { RUNNERS, type RunnerName, whichBin } from "@hamsterwheel/runners";
 
 import { RunFatalError } from "./errors.ts";
+import type { QuotaVerdict } from "./quota.ts";
 
 /**
  * Everything that would fail identically for EVERY issue, checked once before the first claim.
@@ -20,6 +21,11 @@ export type PreflightInput = {
   runners?: RunnerName[];
   env?: Record<string, string | undefined>;
   which?: (bin: string) => string | null;
+  /**
+   * API quota verdict, fetched by the caller so this stays synchronous and pure. Omitted → not checked
+   * (`plan` and the unit tests). A `warn` never blocks the start; only an exhausted pool does.
+   */
+  quota?: QuotaVerdict;
 };
 
 export type PreflightProblem = { check: string; detail: string; hint: string };
@@ -50,6 +56,15 @@ export const preflightProblems = (input: PreflightInput): PreflightProblem[] => 
       check: "home",
       detail: "HOME is not set",
       hint: "the worktree root cannot be resolved",
+    });
+
+  // Quota is textbook run-fatal: it fails identically for every item, and it fails at the BOARD read, so
+  // per-issue handling would blame each issue in turn for an account-wide wall.
+  if (input.quota?.exhausted)
+    problems.push({
+      check: `api-quota (${input.quota.exhausted})`,
+      detail: input.quota.detail,
+      hint: "wait for the reset above; nothing is wrong with the board or the config",
     });
 
   if (input.sandbox) {

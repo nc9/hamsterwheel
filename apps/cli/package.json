@@ -38,11 +38,5 @@
   },
   "engines": {
     "bun": ">=1.2.0"
-  },
-  "devDependencies": {
-    "@hamsterwheel/config": "workspace:*",
-    "@hamsterwheel/gate": "workspace:*",
-    "@hamsterwheel/runners": "workspace:*",
-    "@hamsterwheel/sandbox": "workspace:*"
   }
 }

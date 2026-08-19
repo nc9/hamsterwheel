@@ -60,4 +60,7 @@ jobs:
           PACK_DIR="$(mktemp -d)"
           cd "$PACK_DIR" && npm init -y > /dev/null
           npm install --silent "$GITHUB_WORKSPACE/apps/cli"
-          ./node_modules/.bin/hamsterwheel --version
+          # The PACKAGE is `hamsterwheel`; the BIN it installs is `hamster` (see apps/cli
+          # package.json "bin"). This step never ran before — the build above failed first — so the
+          # wrong name sat here unnoticed.
+          ./node_modules/.bin/hamster --version

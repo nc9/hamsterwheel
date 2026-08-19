@@ -22,12 +22,6 @@
       "bin": {
         "hamster": "./dist/index.js",
       },
-      "devDependencies": {
-        "@hamsterwheel/config": "workspace:*",
-        "@hamsterwheel/gate": "workspace:*",
-        "@hamsterwheel/runners": "workspace:*",
-        "@hamsterwheel/sandbox": "workspace:*",
-      },
     },
     "packages/config": {
       "name": "@hamsterwheel/config",

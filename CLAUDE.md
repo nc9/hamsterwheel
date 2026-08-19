@@ -2,7 +2,7 @@
 
 Autonomous issue-loop infrastructure for coding agents: an OS-isolation sandbox runner for headless agent sessions, a pure merge-gate kit, and (eventually) a config-driven loop CLI. You sleep, the hamster runs the wheel.
 
-Extracted from a production loop that ran overnight autonomous implementation waves on the squirrelscan monorepo (`scripts/issue-loop.ts` there). The lessons below are paid for — don't relearn them.
+Extracted from a production loop that ran overnight autonomous implementation waves on a private monorepo. The lessons below are paid for — don't relearn them.
 
 ## Workspace
 

@@ -32,7 +32,7 @@ export const BLOCKING_REVIEW_RE =
  *
  *   No (critical), (high), (medium), (low), or (nit) issues to flag.
  *
- * That line is verbatim from a real review (squirrelscan/repo#1402, a green PR) and it made the gate
+ * That line is verbatim from a real review on a green PR, and it made the gate
  * report one blocking finding on a review that had none. "Err toward blocking" is the right instinct for
  * an AMBIGUOUS line, but this one is not ambiguous — it is the reviewer saying the opposite — and the
  * cost is not one human glance: every clean PR whose review ends this way parks instead of merging,

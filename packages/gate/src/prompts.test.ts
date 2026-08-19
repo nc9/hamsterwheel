@@ -178,7 +178,7 @@ describe("commitSignoff", () => {
     issueNumber: 1574,
     issueTitle: "links/anchor-text counts per link",
     issueBody: "## Acceptance Criteria\n- [ ] counts per pair",
-    repoSlug: "squirrelscan/squirrelscan",
+    repoSlug: "acme/backend",
     branch: "loop/1574-anchor-text",
   };
 

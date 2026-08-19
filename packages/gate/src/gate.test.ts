@@ -138,7 +138,7 @@ describe("reviewBlockingFindings", () => {
   });
 
   // The sign-off enumerates the severities it did NOT find, so a naive per-line severity scan reads a
-  // clean review as blocking. Verbatim from squirrelscan/repo#1402, a green PR the gate would have parked.
+  // clean review as blocking. Verbatim from a real review on a green PR the gate would have parked.
   test("a clean sign-off naming the severities is NOT a finding", () => {
     expect(
       reviewBlockingFindings(
@@ -195,7 +195,7 @@ describe("parseRubricVerdict", () => {
     expect(() => parseRubricVerdict("I could not determine a verdict")).toThrow();
   });
 
-  // The squirrelscan #1127 / #1166 failure: claude's json envelope didn't parse, so lastMessage became
+  // The back-to-back production failure: claude's json envelope didn't parse, so lastMessage became
   // lastLine(raw) — a lone `}`. Non-empty, so `lastMessage || raw` never consulted raw at all.
   test("a useless-but-non-empty first candidate does not mask a verdict in the second", () => {
     const raw = 'session log…\n{\n  "pass": true,\n  "criteria": [{"text":"a","met":true}]\n}';

@@ -13,7 +13,7 @@ export type ImplementPromptOptions = {
   issueTitle: string;
   /** UNTRUSTED third-party issue body (contains the acceptance-criteria checklist) — fenced. */
   issueBody: string;
-  /** Repo slug for `gh` / PR ops, e.g. "squirrelscan/repo". */
+  /** Repo slug for `gh` / PR ops, e.g. "acme/backend". */
   repoSlug: string;
   /** The implementation branch already checked out in the session's worktree. */
   branch: string;
@@ -25,7 +25,7 @@ export type ImplementPromptOptions = {
   criteriaHeading?: string;
   /** Repo conventions the session must follow. Default: a generic pointer to common agent-guidance files. */
   conventions?: string;
-  /** Self-review instruction (e.g. squirrelscan's "/review skill or a codex pass"). Default: generic. */
+  /** Self-review instruction (e.g. "run the /review skill, or a second-opinion pass"). Default: generic. */
   reviewInstruction?: string;
   /** Local verification instruction (typecheck + tests). Default: generic. */
   verification?: string;

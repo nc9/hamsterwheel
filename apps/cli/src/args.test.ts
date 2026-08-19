@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import { COMMANDS, parseArgs } from "./args.ts";
+import { COMMANDS, isReadOnlyInvocation, parseArgs } from "./args.ts";
 
 const argv = (...a: string[]) => ["bun", "hamsterwheel", ...a];
 
@@ -54,5 +54,34 @@ describe("parseArgs", () => {
 
   test("--config takes a path", () => {
     expect(parseArgs(argv("plan", "--config", "/tmp/x.toml")).configPath).toBe("/tmp/x.toml");
+  });
+});
+
+describe("isReadOnlyInvocation", () => {
+  /**
+   * The regression: `status` shipped absent from this set, so a monitoring command wrote a run log
+   * into the very directory it exists to report on — and left an empty newest run for anything
+   * picking "the current run" by mtime.
+   */
+  test("status only ever reads", () => {
+    expect(isReadOnlyInvocation("status", false)).toBe(true);
+    expect(isReadOnlyInvocation("status", true)).toBe(true);
+  });
+
+  test("plan and reconcile only ever read", () => {
+    expect(isReadOnlyInvocation("plan", false)).toBe(true);
+    expect(isReadOnlyInvocation("reconcile", false)).toBe(true);
+  });
+
+  test("release reads without --execute and writes with it", () => {
+    expect(isReadOnlyInvocation("release", false)).toBe(true);
+    expect(isReadOnlyInvocation("release", true)).toBe(false);
+  });
+
+  test("once and run always write, with or without --execute", () => {
+    for (const c of ["once", "run"] as const) {
+      expect(isReadOnlyInvocation(c, false)).toBe(false);
+      expect(isReadOnlyInvocation(c, true)).toBe(false);
+    }
   });
 });

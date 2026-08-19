@@ -21,6 +21,23 @@ export type Command = (typeof COMMANDS)[number];
 
 export const isCommand = (v: string): v is Command => (COMMANDS as readonly string[]).includes(v);
 
+/**
+ * Does this invocation only READ? Read-only invocations must leave no run log and no status file —
+ * anything they wrote would be a record of work that never happened.
+ *
+ * `status` is the sharp case and the reason this is a function rather than an inline condition: a
+ * monitoring command that writes a run log pollutes the directory it exists to report on, and leaves
+ * an empty newest run for anything picking "the current run" by mtime. It shipped that way once.
+ *
+ * `init`, `doctor` and `prune` never reach this path — they return earlier — so they are absent by
+ * construction rather than by omission.
+ */
+export const isReadOnlyInvocation = (command: Command, execute: boolean): boolean =>
+  command === "plan" ||
+  command === "reconcile" ||
+  command === "status" ||
+  (command === "release" && !execute);
+
 export type FlagSpec = {
   /** Canonical form, e.g. `--issue`. */
   flag: string;

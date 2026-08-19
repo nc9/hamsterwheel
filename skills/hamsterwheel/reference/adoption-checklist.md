@@ -71,11 +71,44 @@ hamster plan   # every skipped issue prints its reason
 
 Both an `## Acceptance Criteria` heading and at least one `- [ ]` checkbox are required. A heading with prose under it is not a rubric. Bulk-filed issues from a template are the usual offender: the checkboxes are there, under a differently-named heading.
 
-## 4. Confirm no issue's diff lands in a submodule — **SILENT**
+## 4. Confirm every Ready issue's diff lands in THIS repo — **SILENT**
 
-The loop's worktree is one repo. An issue whose fix belongs in a submodule needs a commit and PR in that repo **plus** a gitlink bump in the parent, and one merge gate cannot land both atomically — the parent PR's gitlink would point at a commit not yet on the submodule's remote.
+The loop's worktree is one repo, and so is its board filter: it works issues and opens PRs in
+`cfg.repo` only. An issue whose fix belongs in a submodule, a split-out repo or a sibling package
+repo is not workable here, however well written it is. A submodule fix additionally needs a gitlink
+bump in the parent, and one merge gate cannot land both atomically — the parent PR's pointer would
+reference a commit not yet on the other remote.
 
-Grep candidate issues for the submodule path before promoting them to Ready. The fix is a second config whose `repo` is the submodule's repo, run from a standalone clone of it, with the gitlink bumped as a separate batched commit afterwards. That is the normal submodule workflow, not a workaround: the pointer bump was never part of the change.
+Grep candidate issues for the other repo's paths before promoting them to Ready. The fix is a second
+config whose `repo` is that repo, run from a standalone clone, with the pointer bumped as a separate
+batched commit afterwards. That is the normal workflow, not a workaround: the pointer bump was never
+part of the change.
+
+Two consequences to settle **before** writing those issues, not after:
+
+- **Every acceptance criterion must be checkable inside that repo.** The rubric grader is read-only
+  inside one worktree. A box naming a file in the other repo can never be ticked — the grader looks,
+  does not find, and fails the issue. Those belong in a follow-up chore in the repo that owns the
+  file.
+- **Anything the other repo generates from this one's source goes stale on every merge**, and its CI
+  goes red until someone regenerates and re-points it. Decide who does that and when. Batched, once
+  per wave, is fine; unowned is not.
+
+## 4b. If the repo enforces DCO, set `commit_signoff` — **SILENT until the first PR**
+
+A DCO check rejects per **commit**, and its failure names the commit, not your config — so it reads
+as an agent mistake rather than a missing setting. Set `commit_signoff = true` and the session
+prompts instruct `git commit -s`.
+
+The trailer must match the commit's **mailmap-applied** author. If `.mailmap` rewrites the identity
+git is configured with, a correctly-signed commit still fails, forever. Set the clone's
+`user.email` to whatever the mailmap resolves _to_:
+
+```bash
+git -C <clone> config user.email <the-mailmap-target-address>
+```
+
+Lane worktrees share the clone's `.git/config`, so setting it once covers every lane.
 
 ## 5. Set `ci_timeout_ms` from measured durations
 
@@ -114,6 +147,27 @@ A harness tool allow-list does not cover a runner's own consent model. Codex nee
 `--sandbox` is the only real isolation boundary. Tool allow-lists, env scrubs and fenced prompts are defense-in-depth: `Edit`/`Write` reach absolute paths, scoped `Bash` still runs arbitrary code, and on-disk credentials stay readable.
 
 If you run without it, you are trusting the issue text. Screening plus fencing is good, and it is not a sandbox.
+
+## 8b. Provision the board's Status options — **SILENT until the first command**
+
+`init` creates the board, the labels, the `Owner` field and `Blocked reason` with all its options —
+but on a freshly created board the `Status` field keeps GitHub's defaults (`Todo`, `In Progress`,
+`Done`). `doctor` passes, because it resolves the board fine. The break lands on the first real
+command:
+
+```
+✗ Error: status option "Draft" not on the board (have: Todo, In Progress, Done)
+```
+
+Check before the first run, and add the six the loop uses (`Draft`, `Ready`, `In Progress`,
+`In Review`, `Blocked`, `Done`):
+
+```bash
+gh project field-list <n> --owner <owner> --format json | jq '.fields[] | select(.name=="Status")'
+```
+
+`updateProjectV2Field` with `singleSelectOptions` **replaces the whole option set**, so it is only
+safe while the board has no items — which is exactly the post-init window.
 
 ## 9. First batch: `--pr-only`
 

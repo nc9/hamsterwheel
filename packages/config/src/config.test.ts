@@ -48,7 +48,7 @@ describe("parseConfig — defaults", () => {
     expect(c.sourceRepos).toEqual(["acme/backend"]);
   });
 
-  test("board names are fully overridable — no squirrelscan vocabulary is hardcoded", () => {
+  test("board names are fully overridable — no source-repo vocabulary is hardcoded", () => {
     const c = parseConfig(
       withOver({
         board: {

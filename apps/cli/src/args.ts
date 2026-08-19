@@ -14,6 +14,7 @@ export const COMMANDS = [
   "triage",
   "reconcile",
   "prune",
+  "status",
   "release",
 ] as const;
 export type Command = (typeof COMMANDS)[number];
@@ -32,6 +33,11 @@ export type FlagSpec = {
 };
 
 export const FLAG_SPECS: readonly FlagSpec[] = [
+  {
+    flag: "--stream",
+    desc: "emit each run-log event as an NDJSON line while it happens (one JSON object per line)",
+    commands: ["once", "run"],
+  },
   {
     flag: "--execute",
     desc: "do real work — without it the command is a read-only / print-only pass",
@@ -127,6 +133,7 @@ export type ParsedArgs = {
   execute: boolean;
   /** Stop at the open PR (skip gate + merge) — supervised runs. */
   prOnly: boolean;
+  stream: boolean;
   /** OS-isolate the sessions in a container. */
   sandbox: boolean;
   /** claude only: full bypassPermissions instead of the scoped allow-list. */
@@ -162,6 +169,7 @@ export const parseArgs = (argv: string[]): ParsedArgs => {
     json: false,
     execute: false,
     prOnly: false,
+    stream: false,
     sandbox: false,
     bypass: false,
     sync: false,
@@ -198,6 +206,10 @@ export const parseArgs = (argv: string[]): ParsedArgs => {
       case "--pr-only":
         out.prOnly = true;
         see("--pr-only");
+        break;
+      case "--stream":
+        out.stream = true;
+        see("--stream");
         break;
       case "--sandbox":
         out.sandbox = true;

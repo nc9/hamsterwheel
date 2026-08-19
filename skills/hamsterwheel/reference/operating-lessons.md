@@ -149,8 +149,33 @@ Everything below applies once you run more than one lane. The serial loop avoids
 - **N lanes exhaust the GraphQL quota** (~20 minute lockout) — the same wall described under Quota above, reached N times faster. Everything PR-shaped has a REST equivalent, and REST is a separate pool: REST-first for PR ops, and batch the Projects v2 board mutations (GraphQL-only) into start and end sweeps.
 - **`cancel-in-progress` is correct for tests and catastrophic for deploys.** Six back-to-back merges each cancelled the previous run, so five intermediate deploy jobs never executed and five services silently ran pre-batch code. If a merge has side effects, it cannot share a cancellable concurrency group with CI.
 - **Parallel branches off one base collide on generated sequence numbers** (migration files being the classic). Whoever merges second regenerates. Never hand-renumber.
+- **The same collision applies to any committed derived file**, and it is easier to miss because there is no number to notice: a generated catalog, a bundled type file, a committed lockfile. Each PR snapshots it at branch time, so the first merge invalidates every sibling's copy and their drift guards fail on the merge ref. If a batch's issues all regenerate one artifact, that batch is serial — lane count is a property of the work, not of the machine. Where one PR _changes the shape_ of the derived file rather than just its contents, merge that one last, after a fresh base merge and a regenerate.
+- **Branch protection that requires up-to-date-with-base serialises the batch anyway.** Merging one PR puts every open sibling `BEHIND`; each needs `gh pr update-branch`, which re-triggers its whole CI run. Parallel lanes there buy extra CI, not throughput.
 - **Stacked PRs:** merging a parent with `--delete-branch` auto-closes its children. Merge children first, or retarget before the parent merges.
 - **Before declaring a merge train done, the open-PR count must be zero.** Phase lists drift. The zero check doesn't.
+
+## Post-mortems
+
+**The board shows state; only the run log shows cause.** `~/.hamsterwheel/runs/<owner>-<repo>/<ts>.jsonl` is one
+JSON object per event — `claim`, `implement-session` (with the resolved runner/model/effort),
+`pr-open`, `review-fix` (with the finding count per round), `gate` (with every signal and the
+decision), then `merged` / `blocked` / `failed` / `done`. An issue that ended `Blocked` tells you
+nothing about whether it burned four review rounds first, ran an hour at the wrong effort, or died on
+a precondition. The jsonl does.
+
+Worth reading it for the shape of a run, not just its failures:
+
+- **`implement-session` durations and the effort each resolved to.** If most of a night went to
+  sessions running the strong tier on small work, the tier config is the finding, not any one issue.
+- **`review-fix` rounds with a flat finding count** (1 → 1 → 1 → 1, then blocked) means the reviewer
+  is re-deriving rather than converging. That is a cap-and-rebut problem, not a code problem.
+- **Aborted runs** — a start event with nothing after it — are the signature of an environmental
+  wall, usually quota. Several in a short window is a pattern, not bad luck.
+- **The same issue claimed across multiple run ids** means work is being redone; check that salvage
+  is being resumed rather than re-derived.
+
+For "is it alive right now" the run log is the wrong tool — it cannot distinguish a dead run from a
+slow one, because both stop appending. That is what `hamster status` and its heartbeat are for.
 
 ## Trust boundaries
 

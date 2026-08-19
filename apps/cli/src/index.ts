@@ -34,6 +34,7 @@ import { fetchRateLimits, quotaVerdict } from "./quota.ts";
 import { runPrune } from "./prune.ts";
 import { release, renderRelease } from "./release.ts";
 import { type RunLog, createRunLog, makeRunId } from "./runlog.ts";
+import { classifyStatus, createStatus, nullStatus, readStatus, runDirFor } from "./status.ts";
 
 export const HELP = globalHelp(pkg.version);
 
@@ -170,24 +171,40 @@ export const main = async (argv: string[]): Promise<number> => {
       (args.command === "release" && !args.execute);
     // Tee the run log so --json can replay the exact structured events the .jsonl file records.
     const events: Record<string, unknown>[] = [];
-    const base = createRunLog({
-      dir: `${process.env.HOME}/.hamsterwheel/runs`,
-      runId: makeRunId(0),
-    });
+    // Repo-scoped: a flat global directory made "the current run" unfindable the moment a second
+    // loop existed, and the run log carried no repo field to catch the mistake.
+    const runDir = runDirFor(process.env.HOME ?? ".", cfg.repo);
+    const base = createRunLog({ dir: runDir, runId: makeRunId(0) });
     const runLog: RunLog = {
       ...base,
       append: (event, data = {}) => {
         base.append(event, data);
         // Same shape as the .jsonl lines, so "events mirror the run log" is literally true.
-        events.push({ ts: new Date().toISOString(), run: base.runId, event, ...data });
+        const line = { ts: new Date().toISOString(), run: base.runId, event, ...data };
+        events.push(line);
+        // Streaming is for a parent that spawned this process and holds the pipe; the status file
+        // is for one that attached later or is polling. They serve different readers, so both exist.
+        if (args.stream) process.stdout.write(`${JSON.stringify(line)}\n`);
       },
     };
+    const status =
+      readOnly || !args.execute
+        ? nullStatus()
+        : createStatus({
+            dir: runDir,
+            runId: base.runId,
+            repo: cfg.repo,
+            command: args.command,
+            execute: args.execute,
+            lanes: cfg.worktreeLanes,
+          });
     const deps: CommandDeps = {
       gh,
       cfg,
       ctx,
       log,
       runLog,
+      status,
       prOnly: args.prOnly,
       sandbox: args.sandbox,
       bypassPermissions: args.bypass,
@@ -195,7 +212,8 @@ export const main = async (argv: string[]): Promise<number> => {
     log(
       `🐹 hamsterwheel — ${cfg.repo} · project #${ctx.projectNumber} · ${args.command}${args.execute ? " (--execute)" : ""}`,
     );
-    if (!readOnly) runLog.append("start", { command: args.command, execute: args.execute });
+    if (!readOnly)
+      runLog.append("start", { command: args.command, execute: args.execute, repo: cfg.repo });
 
     switch (args.command) {
       case "plan": {
@@ -203,6 +221,31 @@ export const main = async (argv: string[]): Promise<number> => {
         if (args.json) emit({ ...report });
         else renderPlan(report, log);
         return 0;
+      }
+      case "status": {
+        const verdict = classifyStatus(
+          readStatus(runDirFor(process.env.HOME ?? ".", cfg.repo)),
+          Date.now(),
+        );
+        if (args.json) emit({ ...verdict });
+        else {
+          const icon = { running: "▶", stale: "⚠", ended: "✓", idle: "·" }[verdict.state];
+          log(`  ${icon} ${verdict.state} — ${verdict.detail}`);
+          if (verdict.status) {
+            const c = verdict.status.counts;
+            log(
+              `    run ${verdict.status.runId} · started ${verdict.status.startedAt} · updated ${Math.round(verdict.staleSeconds ?? 0)}s ago`,
+            );
+            log(
+              `    claimed ${c.claimed} · prs ${c.prsOpened} · merged ${c.merged} · blocked ${c.blocked} · failed ${c.failed} · done ${c.done}`,
+            );
+            for (const l of verdict.status.lanes)
+              log(
+                `    lane-${l.lane}: ${l.issue ? `#${l.issue} ` : ""}${l.phase} (since ${l.since})`,
+              );
+          }
+        }
+        return verdict.state === "stale" ? 1 : 0;
       }
       case "reconcile": {
         const report = await reconcile(deps);
@@ -267,6 +310,9 @@ export const main = async (argv: string[]): Promise<number> => {
             execute: args.execute,
             issue: args.issue,
           });
+          // Stamp the end so a reader can tell "finished 20m ago" from "died 20m ago" — without it
+          // both look like a status file whose heartbeat simply stopped.
+          status.finish();
         } catch (e) {
           const fatal = runFatalReason(e);
           if (!fatal) throw e;
@@ -274,6 +320,7 @@ export const main = async (argv: string[]): Promise<number> => {
           log(`\n✗ run aborted — ${fatal}`);
           log("  (the queue is intact: the claimed item was released, nothing else was touched)");
           runLog.append("run-aborted", { reason: fatal });
+          status.finish();
           if (args.json)
             console.log(
               JSON.stringify(

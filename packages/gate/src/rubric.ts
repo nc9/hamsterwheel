@@ -47,8 +47,8 @@ export const tryParseRubricVerdict = (text: string): RubricVerdict | undefined =
  * Why more than one candidate: for `claude`, `parseRunnerOutput` falls back to `lastLine(raw)` when the
  * `--output-format json` envelope doesn't parse — and the last line of a pretty-printed verdict is a lone
  * `}`. That is non-empty, so a naive `lastMessage || raw` picks the useless one and never looks at `raw`,
- * which is where the verdict actually is. Observed on squirrelscan #1127 and #1166: both produced good,
- * CI-green PRs and then blocked on "no JSON verdict", one after the other.
+ * which is where the verdict actually is. Observed twice in a row on a production board: both issues
+ * produced good, CI-green PRs and then blocked on "no JSON verdict".
  *
  * The failure message carries the shape of what it saw. The bare version cost a full debugging detour
  * because "no JSON verdict" cannot distinguish an empty session, a truncated one, and a grader that

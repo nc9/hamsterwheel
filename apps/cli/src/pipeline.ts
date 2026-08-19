@@ -28,6 +28,7 @@ import { baseRefFor, gitToplevel, localBranches, staleBaseFiles } from "./git.ts
 import { type LoopIssue, branchName, findPriorClosingPr } from "./issues.ts";
 import { acquireLane, laneDir, releaseLane } from "./lanes.ts";
 import type { Mutex } from "./concurrency.ts";
+import type { StatusWriter } from "./status.ts";
 import { type Clock, type RunLog, makeRunId } from "./runlog.ts";
 import { runSession } from "./session.ts";
 
@@ -38,6 +39,8 @@ export type LoopDeps = {
   ctx: BoardCtx;
   log: (msg: string) => void;
   runLog: RunLog;
+  /** Live status sink. Read-only commands pass a no-op writer so they leave no status file. */
+  status?: StatusWriter;
   now?: Clock;
   /** Stop after the PR is open (skip gate + merge) — for supervised runs. */
   prOnly?: boolean;
@@ -167,6 +170,12 @@ export const waitForChecks = async (
   prNum: number,
   sleep: (ms: number) => Promise<void> = sleepMs,
   now: () => number = Date.now,
+  /**
+   * Called on every poll. This is the loop's longest silence — up to `ci_timeout_ms` with nothing
+   * appended to the run log — so without a heartbeat here a healthy CI wait and a hung process are
+   * the same observation to anything watching.
+   */
+  onPoll?: () => void,
 ): Promise<CiStatus> => {
   const deadline = now() + cfg.ciTimeoutMs;
   for (;;) {
@@ -199,6 +208,7 @@ export const waitForChecks = async (
         timedOut: true,
         pending: pending.map(checkName),
       };
+    onPoll?.();
     await sleep(30_000);
   }
 };
@@ -504,7 +514,7 @@ const runReviewRounds = async (
     for (const f of blocking) seen.add(f);
     // Re-verify with the SAME signal that produced the finding: a fix loop that gates on review findings
     // but re-checks only a typechecker exits on a stale signal and reports fixed work as unresolved.
-    ci = await waitForChecks(gh, cfg, prNum);
+    ci = await waitForChecks(gh, cfg, prNum, undefined, undefined, () => deps.status?.heartbeat());
     blocking = (await fetchBlockingReview(gh, cfg, prNum)).blocking;
   }
   if (blocking.length) {
@@ -560,10 +570,14 @@ export const runMergeGate = async (
   iss: LoopIssue,
   prNum: number,
   worktree: string,
+  lane = 0,
 ): Promise<GateAction> => {
   const { cfg, gh, log } = deps;
   log(`  gate #${iss.number} PR #${prNum}: waiting for CI…`);
-  let ci = await waitForChecks(gh, cfg, prNum);
+  deps.status?.phase(lane, "ci-wait", { issue: iss.number, detail: `PR #${prNum}` });
+  let ci = await waitForChecks(gh, cfg, prNum, undefined, undefined, () =>
+    deps.status?.heartbeat(),
+  );
   // Red because the tests failed, or red because GitHub refused to run them? The second is about the
   // account and recurs for every issue, so it must abort the run rather than park this PR as ci-red and
   // move on to do the same to the rest of the queue.
@@ -583,6 +597,7 @@ export const runMergeGate = async (
   let rounds = 0;
   // A fired human rule parks for a human regardless, so don't spend rounds fixing review findings on it.
   if (review.blocking.length && !humanRules.length) {
+    deps.status?.phase(lane, "review-fix", { issue: iss.number, detail: `PR #${prNum}` });
     const r = await runReviewRounds(deps, iss, prNum, worktree, review.blocking);
     rounds = r.rounds;
     if (r.rounds > 0) ci = r.ci;
@@ -614,6 +629,7 @@ export const runMergeGate = async (
     !review.blocking.length
   ) {
     log("  gate: CI green, no human rule fired, review clean → running rubric…");
+    deps.status?.phase(lane, "rubric", { issue: iss.number, detail: `PR #${prNum}` });
     rubricPass = (await runRubric(deps, iss, prNum, worktree, ci)).pass;
   }
   const decision = mergeDecision({
@@ -787,6 +803,7 @@ export const runImplement = async (
     log(
       "  ⚠ bypassPermissions grants the session unrestricted tools. Worktree-scoped and env-scrubbed, but NOT OS-isolated (use --sandbox).",
     );
+  deps.status?.phase(lane, "implementing", { issue: iss.number, detail: branch });
   deps.runLog.append("implement-session", {
     issue: iss.number,
     branch,
@@ -918,6 +935,8 @@ export const claimAndRun = async (
       `🐹 **hamsterwheel** claimed this issue.\n- run: \`${runId}\`\n- branch: \`${branch}\`\n- started: ${now().toISOString()}`,
     );
     deps.runLog.append("claim", { issue: iss.number, branch, lane, worktree });
+    deps.status?.phase(lane, "claiming", { issue: iss.number });
+    deps.status?.count("claimed");
   } catch (e) {
     // Roll the claim back so the item isn't orphaned In Progress with no live session behind it. The
     // OWNER must be cleared too: a half-claim (owner written, comment failed) would leave the item Ready
@@ -968,6 +987,7 @@ export const claimAndRun = async (
         `🐹 **Already resolved** — ${why}; the change is already in \`${cfg.baseBranch}\`, so no PR was opened.${prior ? ` A prior merged PR resolved it: ${prior.url}.` : ""} Marked Done.`,
       );
       log(`  ✓ #${iss.number} → Done (already resolved${prior ? `, prior PR ${prior.url}` : ""})`);
+      deps.status?.count("done");
       deps.runLog.append("done", { issue: iss.number, via: outcome.kind, priorPr: prior?.number });
       return;
     }
@@ -980,6 +1000,7 @@ export const claimAndRun = async (
     await setStatus(gh, ctx, iss.itemId, cfg.board.status.inReview);
     log(`  ✓ #${iss.number} → ${cfg.board.status.inReview} (${outcome.url})`);
     deps.runLog.append("pr-open", { issue: iss.number, pr: prNum, url: outcome.url });
+    deps.status?.count("prsOpened");
 
     if (deps.prOnly) {
       await comment(
@@ -998,7 +1019,7 @@ export const claimAndRun = async (
       iss.number,
       `🐹 PR opened: ${outcome.url} — running the merge gate (CI · human rules · review · rubric).`,
     );
-    const decision = await runMergeGate(deps, iss, prNum, worktree);
+    const decision = await runMergeGate(deps, iss, prNum, worktree, lane);
     if (decision.action === "MERGE") {
       // A draft PR cannot be merged: `gh pr merge` dies on `GraphQL: Pull Request is still a draft`.
       // That check runs LAST, so a draft threw away a full passing gate — CI, both review rounds and
@@ -1028,6 +1049,7 @@ export const claimAndRun = async (
             if (state !== "MERGED") throw e;
           });
       };
+      deps.status?.phase(lane, "merging", { issue: iss.number, detail: `PR #${prNum}` });
       if (deps.mergeLock) {
         const queued = deps.mergeLock.waiting();
         if (queued > 0) log(`  ⇢ #${iss.number}: waiting to merge (${queued} lane(s) ahead)`);
@@ -1042,6 +1064,7 @@ export const claimAndRun = async (
       );
       log(`  ✓ #${iss.number} → Done (merged ${outcome.url})`);
       deps.runLog.append("merged", { issue: iss.number, pr: prNum });
+      deps.status?.count("merged");
     } else {
       // The gate emits canonical reason slugs; the board's option names are configurable and may differ.
       const optionName =
@@ -1060,6 +1083,7 @@ export const claimAndRun = async (
         `🐹 Held at the merge gate → **Blocked: ${decision.reason}** — ${decision.detail}. PR: ${outcome.url}.`,
       );
       log(`  ⏸ #${iss.number} → Blocked: ${decision.reason} (${decision.detail})`);
+      deps.status?.count("blocked");
       deps.runLog.append("blocked", {
         issue: iss.number,
         reason: decision.reason,
@@ -1110,6 +1134,7 @@ export const claimAndRun = async (
     log(
       `  ✗ #${iss.number} failed → Blocked: ${String(e).slice(0, 160)}${wip ? ` (WIP preserved on ${wip})` : ""}`,
     );
+    deps.status?.count("failed");
     deps.runLog.append("failed", {
       issue: iss.number,
       error: String(e).slice(0, 800),
@@ -1118,6 +1143,7 @@ export const claimAndRun = async (
   } finally {
     // Release, don't remove: the lane stays warm (node_modules, caches) for the next issue. Dirty work
     // was already salvaged onto a plain ref; the release just detaches so the branch ref is free.
+    deps.status?.phase(lane, "idle", { issue: null });
     await releaseLane(cfg, lane, deps.gitLock);
   }
 };

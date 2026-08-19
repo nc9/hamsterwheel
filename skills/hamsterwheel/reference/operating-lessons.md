@@ -156,7 +156,7 @@ Everything below applies once you run more than one lane. The serial loop avoids
 
 ## Post-mortems
 
-**The board shows state; only the run log shows cause.** `~/.hamsterwheel/runs/<ts>.jsonl` is one
+**The board shows state; only the run log shows cause.** `~/.hamsterwheel/runs/<owner>-<repo>/<ts>.jsonl` is one
 JSON object per event — `claim`, `implement-session` (with the resolved runner/model/effort),
 `pr-open`, `review-fix` (with the finding count per round), `gate` (with every signal and the
 decision), then `merged` / `blocked` / `failed` / `done`. An issue that ended `Blocked` tells you
@@ -173,6 +173,9 @@ Worth reading it for the shape of a run, not just its failures:
   wall, usually quota. Several in a short window is a pattern, not bad luck.
 - **The same issue claimed across multiple run ids** means work is being redone; check that salvage
   is being resumed rather than re-derived.
+
+For "is it alive right now" the run log is the wrong tool — it cannot distinguish a dead run from a
+slow one, because both stop appending. That is what `hamster status` and its heartbeat are for.
 
 ## Trust boundaries
 

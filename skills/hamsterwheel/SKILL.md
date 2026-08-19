@@ -132,7 +132,7 @@ The CLI is built to be driven headless — no command ever needs a human at the 
 - **`--json` on every command**: exactly one JSON object on stdout (`{ ok, command, ... }`); all human progress text goes to stderr, so `hamster … --json | jq` always parses. Errors in `--json` mode are also JSON on stdout: `{ ok: false, error: { kind, message } }` with `kind` ∈ `usage | config | run-fatal | error`.
 - **`hamster <command> --help`** documents that command's flags, exit codes, and the exact `--json` shape. Trust it over memory.
 - **Flags are validated per command**: a flag on a command it doesn't apply to (e.g. `plan --delete`) exits 1 with the list of commands that accept it — it is never silently ignored.
-- **`once`/`run` `--json`** replays the structured run-log events (`claim`, `pr-open`, `gate`, `merged`, `blocked`, `failed`, …) plus a summary with counts — the same events written to `~/.hamsterwheel/runs/*.jsonl`.
+- **`once`/`run` `--json`** replays the structured run-log events (`claim`, `pr-open`, `gate`, `merged`, `blocked`, `failed`, …) plus a summary with counts — the same events written to the run log. It emits **once, at exit**; for a live feed use `--stream`, and to check on a run you did not spawn use `hamster status` (see Monitoring a run).
 - **`init` never prompts off a TTY**: pass `--yes` to apply or `--dry-run` to preview (mandatory with `--json`); `--project-title <t>` overrides the default board title "<repo-name> Loop" (the repo name is in the default because most orgs run multiple boards).
 
 ## Lanes: how sessions get a working copy
@@ -209,6 +209,58 @@ Cutting a release **archives** the shipped Done items (Projects v2 archive — h
 
 Start a new repo on `--pr-only`. It runs the identical pipeline and stops at the open PR, so you inspect real output before the merge path ever executes unsupervised. Graduate to the full gate once you've seen the reviewer emit a correctly-tagged blocking finding at least once — until then the blocking-review path is untested in that repo, and an untested gate arm reads as approval. If the repo has no review bot at all, that graduation never comes: run `review.mode = "optional"` and lean on CI plus the rubric, rather than leaving `required` set against a reviewer that will never speak.
 
+## Monitoring a run
+
+**If you launched the loop, you are responsible for watching it.** A run is minutes to hours of
+unattended work that mutates a board and merges code; "started it and walked away" is not operating
+it. There are three signals, and they answer different questions.
+
+### `hamster status` — what is happening right now
+
+```bash
+hamster status                       # human: phase per lane, counts, seconds since heartbeat
+hamster status --json | jq -r .state # idle | running | stale | ended
+```
+
+Read-only, touches no network or board, safe to poll on any cadence. It reads a per-repo status file
+the run rewrites atomically, so a reader never catches a torn write.
+
+**The state you care about is `stale`.** The run log cannot tell you a run has died — a dead process
+simply stops appending, which is identical to a slow one. `status` heartbeats through the long waits,
+so `stale` means the heartbeat aged out: the run died, or a phase is wedged. It exits 1 in that
+state, so `hamster status --json >/dev/null || alert` is a complete watchdog. `ended` is distinct
+from `stale` — a finished run stamps `endedAt`, so "finished 20m ago" never reads as "died 20m ago".
+
+Each lane reports its `phase` (`claiming`, `implementing`, `ci-wait`, `review-fix`, `rubric`,
+`merging`) and the time it entered it. A phase's `since` is entry time, not last touch, so a lane
+stuck 50 minutes in `ci-wait` is visible even while the run is healthily heartbeating.
+
+### `--stream` — a live event feed
+
+```bash
+hamster run --execute --stream       # one JSON object per line, as each event happens
+```
+
+For a parent that spawned the process and holds the pipe. Same shape as the run-log lines. Plain
+`--json` is a post-mortem: it buffers every event and emits one object at exit, which is useless
+while the run is in flight.
+
+### The run log — why something happened
+
+`~/.hamsterwheel/runs/<owner>-<repo>/<ts>.jsonl`, **per repo** — with more than one loop, a flat
+directory makes "the current run" unfindable, and picking by mtime silently returns the other repo's
+run. Every line carries the run id, and `start` carries the repo.
+
+This is the post-mortem surface, covered in `reference/operating-lessons.md`. Reach for it after the
+fact, not to answer "is it alive".
+
+### What to actually do while it runs
+
+Poll `status`. On `stale`, stop and diagnose rather than relaunching — a second driver against one
+board double-claims. Read the gate's reason on anything that parks: `ci-red` is a defect in the PR,
+`ci-timeout` is not, `needs-human` means a tripwire fired and the batch may now contain merged work
+that depends on the parked change. When the queue drains, reconcile anything the run left In Review.
+
 ## The merge gate
 
 The merge decision is a pure function over its signals, evaluated in a fixed order:
@@ -276,7 +328,8 @@ That verification matters just as much under `optional` as under `required`, and
 | driver died mid-gate with a PR open                 | do **not** re-run that issue; finish the gate by hand                                     |
 | blocked `ci-timeout`                                | CI did not conclude, the suite did not fail — re-run the gate or raise `ci_timeout_ms`    |
 | blocked `dep-open`                                  | working as intended; `plan` names the open dependency                                     |
-| "why did that batch underperform?"                  | read `~/.hamsterwheel/runs/*.jsonl` — the board shows state, the run log shows cause      |
+| "is it still running?"                              | `hamster status` — `stale` means died or wedged; exits 1, so it works as a watchdog       |
+| "why did that batch underperform?"                  | read the run log jsonl — the board shows state, the run log shows cause                   |
 
 A failure about **this** issue blocks this issue. A precondition that fails identically for every item — docker, gh auth, a missing runner binary, a broken setup script — is **run-fatal**: abort, release the claim, touch nothing else. If a whole curated queue went Blocked in under a minute, that taxonomy is what broke, not the sandbox.
 

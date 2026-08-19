@@ -12,6 +12,11 @@ jobs:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
       - run: bun install --frozen-lockfile
+      # MUST precede `bun test`. Each packages/* exports "." -> ./dist/index.js, and dist/ is
+      # gitignored, so in a fresh checkout every `import ... from "@hamsterwheel/config"` fails with
+      # "Cannot find module" until the libraries are built. It resolves on a dev machine only because
+      # dist/ is already sitting there from an earlier build.
+      - run: bun run build
       - run: bun test
       - run: bun run lint
       - name: typecheck

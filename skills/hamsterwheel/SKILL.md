@@ -31,7 +31,39 @@ hamster init             # provision board + labels, write hamsterwheel.toml, sp
 
 `init` splices the issue contract into `CLAUDE.md` and `AGENTS.md` between `<!-- hamsterwheel:start -->` markers, and rewrites in place on re-run. Splice it into **both** if your implement and review runners are different vendors: Claude reads CLAUDE.md, Codex reads AGENTS.md, and a contract only one of them can see is a contract only one of them follows.
 
-Then, before the first batch, work `reference/adoption-checklist.md`. Four of its items are things that fail silently rather than loudly, and one of them defeats the merge gate entirely.
+Then, before the first batch, work `reference/adoption-checklist.md`. Several of its items fail
+silently rather than loudly, and one of them defeats the merge gate entirely.
+
+Two settings worth deciding at adoption rather than discovering:
+
+- **`commit_signoff = true`** if the repo enforces DCO. It is checked per commit, and the failure
+  names the commit rather than your config, so without it every PR fails a gate that reads like an
+  agent mistake. The trailer must match the commit's mailmap-applied author — see the checklist.
+- **`review.mode`** — `optional` unless the repo genuinely has a review bot that posts on every PR.
+  `required` against a repo with no reviewer parks every PR forever, with a reason indistinguishable
+  from a broken reviewer.
+
+## One repo per loop
+
+**The loop works issues and opens PRs in the same repo, and there is no way to split them.**
+`buildQueue` drops any board item whose `content.repository` is not `cfg.repo`, and `cfg.repo` is
+also what every `gh pr` call targets. `source_repos` widens _triage_ only — it decides what
+`triage --sync` folds onto the board, never what the loop is allowed to work.
+
+So if the code for an issue lives somewhere else — a submodule, a split-out public repo, a sibling
+package repo — that issue is not workable by this loop, however well written it is. The fix is a
+second config: a standalone clone of the other repo, its own board, its own `hamsterwheel.toml`.
+
+Two things bite when you do that, and neither is obvious until the first batch:
+
+- **Acceptance criteria must be checkable in the repo the loop runs against.** The rubric grader is a
+  read-only session inside that one worktree. A criterion naming a file that lives in the _other_
+  repo can never be satisfied — the grader looks, does not find, and fails the issue. Strip those
+  criteria out and make them a follow-up chore in the repo that owns the file.
+- **Derived files in the other repo go stale on every merge.** Where repo A commits something
+  generated from repo B's source — a catalog, a manifest, a type bundle, a pinned pointer — every
+  merge in B leaves A's copy wrong and A's CI red until someone regenerates it. That reconciliation
+  is a separate, batched, human-run chore. Plan for it rather than discovering it as a red main.
 
 ## The issue contract
 
@@ -54,6 +86,14 @@ The heading is matched literally and is typo-sensitive. `## Acceptance`, or a re
 - Useless: "the footer is more robust."
 
 Criteria the grader physically cannot run ("tests pass", "typecheck clean") are fine to write — the deterministic CI gate owns them and credits them in code once CI is green. Do not omit them; do not expect the grader to have run them.
+
+Criteria naming files **outside the loop's repo** are a different matter, and they fail every time — see "One repo per loop" above.
+
+**`Depends on #N` must be literal.** The dependency is parsed out of the body by pattern, so a prose
+sentence — "depends on the classification added by the other issue" — is not a dependency, it is a
+comment. The loop will happily start the dependent issue first, and on related work that usually
+means two sessions editing the same seam. `plan` prints `blocked by open dep(s) #N` for a dependency
+it actually parsed; if you do not see that line, it did not.
 
 Also required for eligibility: a priority label (`P0`–`P3`) and a size label (`size: XS`–`size: XL`). Unsized defaults to expensive, which is the right way round.
 
@@ -106,9 +146,29 @@ Sessions never run in your checkout. Each issue runs in a **lane** — a persist
 
 Sizing: a lane costs disk plus one cold `scripts.setup`, so match it to what the machine can genuinely run concurrently. GitHub API quota is consumed per in-flight pipeline, and the pre-claim quota floor scales with lane count accordingly.
 
+**Some batches must stay serial no matter how many lanes the machine can afford.** Lane count is a
+property of the _work_, not only of the hardware:
+
+- **Every issue regenerates the same derived file** — a generated catalog, a committed lockfile, a
+  migration sequence number. Whoever merges second invalidates the first PR's committed copy and
+  fails its drift guard. N lanes buys N-1 conflicts, not N× throughput.
+- **Branch protection requires up-to-date-with-base.** Merging one PR puts every open sibling
+  `BEHIND`; each then needs `gh pr update-branch`, which re-triggers its whole CI run. The batch
+  serialises anyway, just with more wasted CI.
+
+Neither is visible in `plan` — it ranks issues, it does not know two of them touch the same generated
+artifact. Sizing lanes is a judgement about the batch, made before you start it.
+
 **Never run two driver processes against one board.** The claim guard is a read-then-write on the Owner field, not a compare-and-set (Projects v2 has no conditional field update). One process's lanes coordinate through a shared cursor; two processes do not, and will double-claim. Ordering merges is also not a merge queue: two individually-green PRs can still break the base when both land, because neither was tested against the other's result.
 
 After every acquire hamster runs the configured setup script — `[scripts]` `setup` in `hamsterwheel.toml` (Conductor-style lifecycle table; `run`/`archive`/`maintenance` are reserved). It is argv-exec'd with **no shell** (pipes/`&&` belong in a repo script the config points at) and receives context env vars: `HAMSTER_WORKSPACE_PATH` (lane dir), `HAMSTER_WORKSPACE_NAME` (`lane-0`), `HAMSTER_ROOT_PATH` (primary checkout), `HAMSTER_LANE_COLD` (`1` fresh worktree / `0` warm reuse), `HAMSTER_ISSUE`, `HAMSTER_RUN_ID`. No `setup` configured → no setup step. The old `install_cmd` key is a hard config error. `hamster init` pre-fills `setup` from existing conventions when it can (`conductor.json` `scripts.setup`, `.cursor/environment.json` `install`, a `scripts/setup.sh`, or the lockfile's package manager) — detection happens only at init; the runtime obeys the explicit config alone.
+
+A claim **resumes** the newest salvage branch for that issue rather than starting clean, and the
+implement session is told it is resuming and asked to diff against the base before adding to it.
+Salvage nothing ever reads back just means a killed run's work is re-derived from scratch on every
+retry. Only claim-time salvage (`<prefix>/<n>-wip-loop-<ts>-<n>`) is eligible: the lane's own
+leftover sweep names the _previous_ occupant's work after the _incoming_ issue, so resuming that
+shape would graft one issue's abandoned work onto another's branch.
 
 Acquiring a lane for an issue is salvage-first: any leftover work from a crashed run is committed to a durable `<prefix>/<n>-wip-lane…` branch **before** the lane is reset (`reset --hard` + `clean -fd` — never `-x`, so ignored files survive), then the lane branches off the freshly fetched base and its upstream is dropped. A dirty lane whose salvage fails refuses to reset rather than destroy work. On release the lane detaches so it never holds a branch ref.
 
@@ -162,6 +222,27 @@ No model is ever asked "should this merge?" Models grade the rubric, which is a 
 
 Never auto-merged regardless of how green things look: anything matching a `[[human]]` rule in `hamsterwheel.toml` (parked as `needs-human`, with the fired rule names in the reason), anything carrying a high or critical review finding, and anything a reviewer has requested changes on. Nits don't block.
 
+**`ci-red` and `ci-timeout` are different answers.** Red means the suite failed — a defect in the PR.
+Timeout means CI never concluded inside `ci_timeout_ms` — a fact about runner-fleet depth that says
+nothing about the code. They are separate reasons so a slow queue does not send someone to debug a
+failure that never happened. The board option for `ci-timeout` defaults to whatever `ci_red` resolves
+to, so an existing board keeps working until you give it its own option.
+
+**A parked PR does not park what depends on it.** A `[[human]]` rule holds _that_ PR; the loop
+carries on merging everything else, including work that assumes the parked change already landed.
+The canonical shape is a schema migration held for a human while the code reading the new columns
+merges straight past it, leaving deploy red until someone notices. The loop cannot see that edge —
+when a human rule fires, resolve it before the next batch rather than at the end of the week.
+
+**Path-based human rules fire at the gate; label-based ones at selection.** A `paths` rule can only
+match once a diff exists, so it is evaluated _after_ the implement session has run and been paid for.
+If you already know from the issue that a human must see it, a `labels` rule parks it before any
+session spawns, and `plan` says so up front.
+
+**Draft PRs cannot be merged.** The gate marks a draft ready before merging, because that check is
+the very last thing GitHub evaluates — a draft otherwise throws away a full passing gate at the final
+API call. Session prompts are told to open PRs ready; if you customise them, keep that.
+
 ### `review.mode` — how much a server-side review is worth
 
 CI is the essential gate; a PR-comment review is defence in depth. The reviewing may well have happened locally, and plenty of repos have no review bot at all.
@@ -193,6 +274,9 @@ That verification matters just as much under `optional` as under `required`, and
 | burst of instant failures, ~1/min, tiny transcripts | session quota exhaustion, not bugs — see reference                                        |
 | board reads fail but `gh issue`/`gh pr` work fine   | GraphQL quota, not a broken board: `hamster doctor` prints both pools and the reset time  |
 | driver died mid-gate with a PR open                 | do **not** re-run that issue; finish the gate by hand                                     |
+| blocked `ci-timeout`                                | CI did not conclude, the suite did not fail — re-run the gate or raise `ci_timeout_ms`    |
+| blocked `dep-open`                                  | working as intended; `plan` names the open dependency                                     |
+| "why did that batch underperform?"                  | read `~/.hamsterwheel/runs/*.jsonl` — the board shows state, the run log shows cause      |
 
 A failure about **this** issue blocks this issue. A precondition that fails identically for every item — docker, gh auth, a missing runner binary, a broken setup script — is **run-fatal**: abort, release the claim, touch nothing else. If a whole curated queue went Blocked in under a minute, that taxonomy is what broke, not the sandbox.
 

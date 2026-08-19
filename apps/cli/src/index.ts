@@ -11,7 +11,7 @@ import {
 } from "@hamsterwheel/config";
 
 import pkg from "../package.json";
-import { type ParsedArgs, parseArgs, validateArgs } from "./args.ts";
+import { type ParsedArgs, isReadOnlyInvocation, parseArgs, validateArgs } from "./args.ts";
 import { loadBoardCtx } from "./board.ts";
 import {
   type CommandDeps,
@@ -165,10 +165,7 @@ export const main = async (argv: string[]): Promise<number> => {
     }
 
     const ctx = await loadBoardCtx(gh, cfg);
-    const readOnly =
-      args.command === "plan" ||
-      args.command === "reconcile" ||
-      (args.command === "release" && !args.execute);
+    const readOnly = isReadOnlyInvocation(args.command, args.execute);
     // Tee the run log so --json can replay the exact structured events the .jsonl file records.
     const events: Record<string, unknown>[] = [];
     // Repo-scoped: a flat global directory made "the current run" unfindable the moment a second

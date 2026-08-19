@@ -90,6 +90,12 @@ export const reviewCoversHead = (commentAt: string | undefined, headAt: string):
 
 export type GateSignals = {
   ciGreen: boolean;
+  /**
+   * CI did not conclude inside the wait window (as opposed to concluding red). Not mergeable either
+   * way, but it is reported under its own reason so an operator is not sent to debug a test failure
+   * that never happened — the fix for a timeout is a longer window or a faster fleet, not a code change.
+   */
+  ciTimedOut?: boolean;
   /** Names of fired `[[human]]` rules (`matchHumanRules`). Any entry parks the PR for a human. */
   humanRules: string[];
   /**
@@ -113,6 +119,15 @@ export type GateAction = { action: "MERGE" } | { action: "BLOCK"; reason: string
 // Deterministic merge decision. Order: CI (fundamental) → human rules (safety) → changes-requested →
 // review provenance (mode-gated) → review findings → rubric.
 export const mergeDecision = (s: GateSignals): GateAction => {
+  // Ahead of the generic red check: a timeout is a strictly more specific description of the same
+  // not-green state, and the specific reason is the useful one.
+  if (s.ciTimedOut)
+    return {
+      action: "BLOCK",
+      reason: "ci-timeout",
+      detail:
+        "CI did not conclude within the wait window — not a test failure; re-run the gate or raise ci_timeout_ms",
+    };
   if (!s.ciGreen) return { action: "BLOCK", reason: "ci-red", detail: "CI not green" };
   if (s.humanRules.length > 0)
     return {

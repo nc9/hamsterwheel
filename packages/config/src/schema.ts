@@ -24,6 +24,14 @@ export type BlockedReasonNames = {
   needsDecision: string;
   depOpen: string;
   ciRed: string;
+  /**
+   * Option name for `ci-timeout`. DEFAULTS TO THE RESOLVED `ciRed` NAME, not to a literal
+   * "ci-timeout": the gate distinguishes the two reasons, but a board provisioned before that split
+   * has no such option, and writing an unknown option name fails the whole status update. Set
+   * `board.blocked_reasons.ci_timeout` once the option exists to separate them on the board too; the
+   * gate detail and the run log name it distinctly either way.
+   */
+  ciTimeout: string;
   rubricFail: string;
 };
 
@@ -59,9 +67,12 @@ const isReviewMode = (v: string): v is ReviewMode =>
 export type RoleConfig = {
   runner: RunnerName;
   model?: string;
+  /** Flat effort for every issue. Mutually exclusive with the `strong`/`cheap` pair — see readRole. */
   effort?: string;
   strongModel?: string;
   cheapModel?: string;
+  strongEffort?: string;
+  cheapEffort?: string;
 };
 
 export type Config = {
@@ -92,6 +103,15 @@ export type Config = {
    */
   scripts: { setup?: string };
   smokeCmd?: string;
+  /**
+   * Append `-s` (a `Signed-off-by` trailer) to every commit a session makes.
+   *
+   * Required by any repo running a DCO check — without it EVERY loop PR fails the gate, and the
+   * failure names the commit rather than the config, so it reads as an agent mistake. The trailer must
+   * match the commit's mailmap-applied author, so set the repo's `user.email` to whatever the mailmap
+   * resolves to as well; a mismatched identity can never pass no matter how correctly it is signed.
+   */
+  commitSignoff: boolean;
   runners: { implement: RoleConfig; review: RoleConfig };
   allowedTools: string[];
   sessionTimeoutMs: number;
@@ -101,7 +121,15 @@ export type Config = {
   maxReviewRounds: number;
   maxIterations: number;
   worktreeRoot: string;
-  /** Size of the persistent lane pool under `worktreeRoot` (lane-0…lane-N-1). >1 is reserved for wave mode. */
+  /**
+   * Size of the persistent lane pool under `worktreeRoot` (lane-0…lane-N-1), and the number of issues
+   * worked concurrently. 1 (default) is the original serial loop, allocating no locks at all.
+   *
+   * Each lane is a full worktree with its own `node_modules` and build caches, so the cost of a lane is
+   * disk plus one cold `scripts.setup`; the benefit is that implement sessions (12-60 minutes each)
+   * overlap instead of queueing. Bounded in practice by what the machine can run concurrently and by
+   * API quota, which is consumed per in-flight pipeline.
+   */
   worktreeLanes: number;
 };
 
@@ -126,6 +154,7 @@ const DEFAULT_BLOCKED: BlockedReasonNames = {
   needsDecision: "needs-decision",
   depOpen: "dep-open",
   ciRed: "ci-red",
+  ciTimeout: "ci-red", // see BlockedReasonNames.ciTimeout — deliberately not its own default option
   rubricFail: "rubric-fail",
 };
 /** Default scoped tool allow-list for a claude implement session. No blanket `Bash(*)`, no arbitrary-read
@@ -208,6 +237,18 @@ class Reader {
     return v;
   }
 
+  bool(path: string, fallback: boolean): boolean {
+    const v = this.at(path);
+    if (v === undefined) return fallback;
+    // A typo'd bool must fail loudly, not coerce. `commit_signoff = "true"` silently falling back to
+    // false would produce PRs that fail DCO on every commit, with nothing in the config pointing at why.
+    if (typeof v !== "boolean") {
+      this.fail(`${path} must be a boolean (got ${JSON.stringify(v)})`);
+      return fallback;
+    }
+    return v;
+  }
+
   strList(path: string, fallback: string[]): string[] {
     const v = this.at(path);
     if (v === undefined) return fallback;
@@ -259,12 +300,24 @@ const readRole = (
     if (isRunnerName(runnerRaw)) runner = runnerRaw;
     else r.fail(`${path}.runner must be one of ${RUNNERS.join(" | ")} (got "${runnerRaw}")`);
   }
-  const effort = r.optStr(`${path}.effort`);
   // Effort vocabularies differ per runner; a mismatch here is a config typo worth surfacing loudly,
   // unlike a label typo (which silently falls back — a human can't fix a label mid-run).
-  if (effort !== undefined && !RUNNER_EFFORTS[runner].includes(effort.toLowerCase()))
+  const readEffort = (key: string): string | undefined => {
+    const v = r.optStr(`${path}.${key}`);
+    if (v !== undefined && !RUNNER_EFFORTS[runner].includes(v.toLowerCase()))
+      r.fail(
+        `${path}.${key} "${v}" is not valid for runner ${runner} (${RUNNER_EFFORTS[runner].join(" | ")})`,
+      );
+    return v;
+  };
+  const effort = readEffort("effort");
+  const strongEffort = readEffort("strong_effort");
+  const cheapEffort = readEffort("cheap_effort");
+  // A flat `effort` outranks the tier pair in resolution, so setting both means the pair is dead
+  // config that reads as if it were doing something. Fail rather than silently ignore it.
+  if (effort !== undefined && (strongEffort !== undefined || cheapEffort !== undefined))
     r.fail(
-      `${path}.effort "${effort}" is not valid for runner ${runner} (${RUNNER_EFFORTS[runner].join(" | ")})`,
+      `${path}.effort applies one effort to every issue, which overrides ${path}.strong_effort/cheap_effort — set either the flat value or the tier pair, not both`,
     );
   return {
     runner,
@@ -272,6 +325,8 @@ const readRole = (
     effort,
     strongModel: r.optStr(`${path}.strong_model`) ?? fallback.strongModel,
     cheapModel: r.optStr(`${path}.cheap_model`) ?? fallback.cheapModel,
+    strongEffort,
+    cheapEffort,
   };
 };
 
@@ -405,6 +460,12 @@ export const parseConfig = (raw: unknown, opts: { home?: string } = {}): Config 
         needsDecision: r.str("board.blocked_reasons.needs_decision", DEFAULT_BLOCKED.needsDecision),
         depOpen: r.str("board.blocked_reasons.dep_open", DEFAULT_BLOCKED.depOpen),
         ciRed: r.str("board.blocked_reasons.ci_red", DEFAULT_BLOCKED.ciRed),
+        // Falls back to whatever ci_red resolved to (possibly itself overridden), never to a literal
+        // that the board may not carry.
+        ciTimeout: r.str(
+          "board.blocked_reasons.ci_timeout",
+          r.str("board.blocked_reasons.ci_red", DEFAULT_BLOCKED.ciRed),
+        ),
         rubricFail: r.str("board.blocked_reasons.rubric_fail", DEFAULT_BLOCKED.rubricFail),
       },
     },
@@ -426,6 +487,7 @@ export const parseConfig = (raw: unknown, opts: { home?: string } = {}): Config 
     criteriaHeading: r.str("criteria_heading", "Acceptance Criteria"),
     scripts: readScripts(r, raw.scripts),
     smokeCmd: r.optStr("smoke_cmd"),
+    commitSignoff: r.bool("commit_signoff", false),
     runners: {
       implement: readRole(r, "runners.implement", { runner: "claude" }),
       review: readRole(r, "runners.review", { runner: "claude" }),

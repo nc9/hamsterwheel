@@ -609,6 +609,27 @@ describe("mergeDecision", () => {
     const d = mergeDecision({ ...base, ciGreen: false, humanRules: ["prod-migration"] });
     expect(d).toMatchObject({ action: "BLOCK", reason: "ci-red" });
   });
+
+  // A timeout and a red suite are both not-green, but only one of them is the PR's fault. Reporting a
+  // timeout as `ci-red` sent an operator to debug a test failure that never happened.
+  test("a CI timeout blocks under its own reason, not ci-red", () => {
+    const d = mergeDecision({ ...base, ciGreen: false, ciTimedOut: true });
+    expect(d).toMatchObject({ action: "BLOCK", reason: "ci-timeout" });
+    if (d.action === "BLOCK") expect(d.detail).toContain("not a test failure");
+  });
+  test("a timeout outranks the generic red reason, and both outrank a human rule", () => {
+    const d = mergeDecision({
+      ...base,
+      ciGreen: false,
+      ciTimedOut: true,
+      humanRules: ["prod-migration"],
+    });
+    expect(d).toMatchObject({ action: "BLOCK", reason: "ci-timeout" });
+  });
+  test("a concluded-red run is still ci-red, never ci-timeout", () => {
+    const d = mergeDecision({ ...base, ciGreen: false, ciTimedOut: false });
+    expect(d).toMatchObject({ action: "BLOCK", reason: "ci-red" });
+  });
   test("a fired human rule blocks, naming every rule in the detail", () => {
     const d = mergeDecision({ ...base, humanRules: ["prod-migration", "sensitive-domain"] });
     expect(d).toMatchObject({ action: "BLOCK", reason: "needs-human" });

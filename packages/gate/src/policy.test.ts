@@ -9,6 +9,7 @@ import {
   hasAcceptanceCriteria,
   isEpicTitle,
   parseDeps,
+  pickSessionEffort,
   pickSessionModel,
   priorityRank,
   resolveSessionPolicy,
@@ -31,6 +32,82 @@ const defaults = (over: Partial<PolicyDefaults> = {}): PolicyDefaults => ({
   implement: { runner: "claude", strongModel: "opus", cheapModel: "sonnet" },
   review: { runner: "claude", strongModel: "opus", cheapModel: "sonnet" },
   ...over,
+});
+
+describe("effort tiering", () => {
+  const EFFORTS = { strong: "high", cheap: "low" };
+
+  test("effort follows the same tier split as the model", () => {
+    expect(pickSessionEffort(mk({ priority: 0, size: 0 }), EFFORTS)).toBe("high");
+    expect(pickSessionEffort(mk({ priority: 3, size: 4 }), EFFORTS)).toBe("high");
+    expect(pickSessionEffort(mk({ priority: 3, size: 0 }), EFFORTS)).toBe("low");
+    expect(
+      pickSessionEffort(mk({ priority: 3, size: 1, title: "docs: update crawl.mdx" }), EFFORTS),
+    ).toBe("low");
+  });
+
+  // The regression this guards: a run configured `effort = "high"` spent high effort on every issue,
+  // XS one-file changes included. In a serial loop that is the single largest wall-clock cost.
+  test("the tier pair resolves effort when no label and no flat config effort is set", () => {
+    const d = defaults({
+      implement: {
+        runner: "claude",
+        strongModel: "opus",
+        cheapModel: "sonnet",
+        strongEffort: "high",
+        cheapEffort: "low",
+      },
+    });
+    expect(resolveSessionPolicy(mk({ priority: 3, size: 0 }), d).implement).toMatchObject({
+      effort: "low",
+      source: { effort: "heuristic" },
+    });
+    expect(resolveSessionPolicy(mk({ priority: 0, size: 0 }), d).implement).toMatchObject({
+      effort: "high",
+      source: { effort: "heuristic" },
+    });
+  });
+
+  test("a flat config effort still outranks the tier pair", () => {
+    const d = defaults({
+      implement: {
+        runner: "claude",
+        effort: "max",
+        strongEffort: "high",
+        cheapEffort: "low",
+      },
+    });
+    expect(resolveSessionPolicy(mk({ priority: 3, size: 0 }), d).implement).toMatchObject({
+      effort: "max",
+      source: { effort: "config" },
+    });
+  });
+
+  test("a label still outranks the tier pair", () => {
+    const d = defaults({
+      implement: { runner: "claude", strongEffort: "high", cheapEffort: "low" },
+    });
+    const p = resolveSessionPolicy(
+      mk({ priority: 3, size: 0, labels: ["loop:impl-effort-xhigh"] }),
+      d,
+    );
+    expect(p.implement).toMatchObject({ effort: "xhigh", source: { effort: "label" } });
+  });
+
+  // Same guard the model axis already has: efforts are per-runner vocabularies, so a label that
+  // switches the runner must not inherit the configured runner's words.
+  test("a label-switched runner does not inherit the configured tier efforts", () => {
+    const d = defaults({
+      implement: { runner: "claude", strongEffort: "max", cheapEffort: "low" },
+    });
+    const p = resolveSessionPolicy(
+      mk({ priority: 0, size: 4, labels: ["loop:impl-runner-codex"] }),
+      d,
+    );
+    expect(p.implement.runner).toBe("codex");
+    expect(p.implement.effort).toBeUndefined();
+    expect(p.implement.source.effort).toBe("runner-default");
+  });
 });
 
 describe("sessionTier / pickSessionModel", () => {

@@ -45,13 +45,23 @@ export type SessionPlan = {
 };
 export type ResolvedPolicy = Record<RunnerRole, SessionPlan>;
 
-/** Config-supplied defaults for one role. `strongModel`/`cheapModel` feed the heuristic tier. */
+/** Config-supplied defaults for one role. `strong*`/`cheap*` feed the heuristic tier. */
 export type RoleDefaults = {
   runner: RunnerName;
   model?: string;
+  /**
+   * FLAT effort for every issue on this role. A single value here disables the tier heuristic, which
+   * is almost never what an operator means: a run configured `effort = "high"` spent high on XS
+   * one-file changes and 4-file rule additions alike, and high effort on mechanical work is the single
+   * largest source of wall-clock in a serial loop. Prefer `strongEffort`/`cheapEffort`.
+   */
   effort?: string;
   strongModel?: string;
   cheapModel?: string;
+  /** Effort for `sessionTier() === "strong"` work — P0/P1 or size M+. */
+  strongEffort?: string;
+  /** Effort for `sessionTier() === "cheap"` work — XS, or S docs/test/chore/style/ci. */
+  cheapEffort?: string;
 };
 export type PolicyDefaults = Record<RunnerRole, RoleDefaults>;
 
@@ -73,6 +83,16 @@ export const sessionTier = (
   if (iss.size === SIZE_RANK.XS! || mechanical) return "cheap";
   return "strong";
 };
+
+/**
+ * The heuristic EFFORT for an issue, from the same tier split as the model. Kept as its own function
+ * (rather than folded into the model pick) because the two axes are independently configurable: a repo
+ * may want one model at two efforts, or two models at one effort.
+ */
+export const pickSessionEffort = (
+  iss: Pick<SelectableIssue, "labels" | "size" | "priority" | "title">,
+  efforts: { strong: string; cheap: string },
+): string => (sessionTier(iss) === "strong" ? efforts.strong : efforts.cheap);
 
 /**
  * The heuristic model for an issue. Generalized from the source loop's hardcoded opus/sonnet split:
@@ -139,14 +159,27 @@ const resolveRole = (
         ? "heuristic"
         : "runner-default"; // nothing resolved → omit the flag, let the runner pick
 
+  // Same precedence and same runner-switch guard as the model: efforts are per-runner vocabularies
+  // (`xhigh` is meaningless to codex), and validateEffort already rejects a value the runner does not
+  // know, so a label-switched runner simply falls through to its own default rather than inheriting a
+  // word from another vendor.
   const effortLabel = validateEffort(runner, labelValue(iss.labels, p.effort));
-  const effortConfig = validateEffort(runner, defaults.effort);
-  const effort = effortLabel ?? effortConfig;
+  const effortConfig = runnerSwitchedByLabel ? undefined : validateEffort(runner, defaults.effort);
+  const effortHeuristic =
+    !runnerSwitchedByLabel && defaults.strongEffort && defaults.cheapEffort
+      ? validateEffort(
+          runner,
+          pickSessionEffort(iss, { strong: defaults.strongEffort, cheap: defaults.cheapEffort }),
+        )
+      : undefined;
+  const effort = effortLabel ?? effortConfig ?? effortHeuristic;
   const effortSource: PolicySource = effortLabel
     ? "label"
     : effortConfig
       ? "config"
-      : "runner-default";
+      : effortHeuristic
+        ? "heuristic"
+        : "runner-default";
 
   return {
     runner,

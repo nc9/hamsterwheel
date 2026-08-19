@@ -12,6 +12,11 @@ jobs:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
       - run: bun install --frozen-lockfile
+      # MUST precede `bun test`. Each packages/* exports "." -> ./dist/index.js, and dist/ is
+      # gitignored, so in a fresh checkout every `import ... from "@hamsterwheel/config"` fails with
+      # "Cannot find module" until the libraries are built. It resolves on a dev machine only because
+      # dist/ is already sitting there from an earlier build.
+      - run: bun run build
       - run: bun test
       - run: bun run lint
       - name: typecheck
@@ -55,4 +60,7 @@ jobs:
           PACK_DIR="$(mktemp -d)"
           cd "$PACK_DIR" && npm init -y > /dev/null
           npm install --silent "$GITHUB_WORKSPACE/apps/cli"
-          ./node_modules/.bin/hamsterwheel --version
+          # The PACKAGE is `hamsterwheel`; the BIN it installs is `hamster` (see apps/cli
+          # package.json "bin"). This step never ran before — the build above failed first — so the
+          # wrong name sat here unnoticed.
+          ./node_modules/.bin/hamster --version

@@ -10,13 +10,13 @@ Thin **deterministic driver** + model-driven per-issue sessions. Safety-critical
 
 One project board is the single source of truth — no external tracker, no sync boundary.
 
-| Field          | Type          | Values                                                                          |
-| -------------- | ------------- | ------------------------------------------------------------------------------- |
-| Status         | single-select | Draft · Ready · In Progress · In Review · Blocked · Done                        |
-| Priority       | single-select | P0 · P1 · P2 · P3                                                               |
-| Size           | single-select | XS · S · M · L · XL                                                             |
-| Owner          | text          | run-id of the claiming session                                                  |
-| Blocked reason | single-select | needs-criteria · needs-human · needs-decision · dep-open · ci-red · rubric-fail |
+| Field          | Type          | Values                                                                                       |
+| -------------- | ------------- | -------------------------------------------------------------------------------------------- |
+| Status         | single-select | Draft · Ready · In Progress · In Review · Blocked · Done                                     |
+| Priority       | single-select | P0 · P1 · P2 · P3                                                                            |
+| Size           | single-select | XS · S · M · L · XL                                                                          |
+| Owner          | text          | run-id of the claiming session                                                               |
+| Blocked reason | single-select | needs-criteria · needs-human · needs-decision · dep-open · ci-red · ci-timeout · rubric-fail |
 
 Status semantics (the whole human⇄loop interface):
 
@@ -107,19 +107,42 @@ re-check so running dry stops cleanly instead of dying mid-pipeline holding a cl
 are pattern-classified run-fatal so a quota wall cannot Block every item in turn.
 
 - CI red after N fix rounds → Blocked: ci-red.
+- CI never CONCLUDED within `ci_timeout_ms` → Blocked: ci-timeout, a distinct reason. Both are not-green and neither merges, but only one is the PR's fault: a timeout is a statement about runner-fleet depth, and reporting it as ci-red sends an operator to debug a failure that never happened. The board option defaults to whatever `ci_red` resolves to, so an existing board keeps working until it grows its own option.
 - Unresolvable merge conflict → one rebase attempt; still red → Blocked: needs-decision.
-- Session crash/timeout → reap: no PR → salvage + back to Ready; PR open → stays In Review (resumable).
+- Session crash/timeout → reap: no PR → salvage + back to Ready; PR open → stays In Review (resumable). The next claim of that issue STARTS AT the salvage branch rather than at the base, and the implement prompt is told so — salvage that is never read back means a killed run's work is re-derived from scratch on every retry.
+- Implement session ended without a PR url on its last line → before declaring failure, ask GitHub whether an open PR exists for the branch. The session's narration is not the authority on whether it opened a PR; an agent that did the work and then signed off with a summary is otherwise indistinguishable from one that crashed.
+- Merging a DRAFT PR is impossible, and that check runs last — the gate marks a draft ready for review before merging, so a full passing gate is not discarded at the final API call.
 - Driver restart → reconcile from repo state, never from memory: In Progress/In Review with no live session → resume from the PR if open, else reset to Ready. Idempotent by issue #.
 - Driver killed mid-gate with a PR open: do NOT re-run the loop for that issue — finish the gate manually in the loop's order (see CLAUDE.md ops lessons).
 - Notify on every gate hit + empty queue.
 
 ## Concurrency
 
-Serial by default: one issue start→merge→next, so double-claims and cross-PR merge collisions are impossible by construction. **Serial execution is the actual guarantee — the atomic claim is NOT built.** What exists is claim-with-rollback plus a read-then-write guard on the Owner field; Projects v2 has no conditional field update, so two concurrent drivers can still race. Wave mode would need a real compare-and-set (or an external lock) on the same state model, plus a merge queue, dependency-aware scheduling, REST-first GitHub ops, and regenerating colliding generated sequences (migration numbers etc.) on the second merge.
+`worktree_lanes = 1` (default) is serial: one issue start→merge→next, no locks allocated, and
+double-claims and cross-PR merge collisions are impossible by construction.
+
+`worktree_lanes > 1` is **wave mode**: N issues in flight at once, one per persistent lane worktree.
+Serial execution was providing several guarantees implicitly, so each is re-established explicitly:
+
+| what serial gave for free                                                     | what replaces it                                                                                                                                                                           |
+| ----------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| no concurrent writes to shared `.git` (refs, worktree registry, `index.lock`) | a **git lock** around the shared-repo half of lane acquire/release — deliberately NOT held across `.worktreeinclude` copying or `scripts.setup`, which touch only the lane's own directory |
+| no interleaved merges to the base                                             | a **merge lock**, so merges are ordered and the order is deterministic in the run log                                                                                                      |
+| one issue per cursor position                                                 | a shared cursor: a worker only takes an item no other worker has been handed                                                                                                               |
+| one pipeline's worth of API quota in flight                                   | the pre-claim quota floor is `PIPELINE_COST × lanes`                                                                                                                                       |
+| attributable console output                                                   | every log line is tagged `[L<n>]` in wave mode                                                                                                                                             |
+
+**Still not solved, and it matters:** the claim remains a read-then-write on the Owner field, NOT a
+compare-and-set — Projects v2 has no conditional field update. Within one process the shared cursor
+makes that irrelevant; **two driver processes against the same board can still double-claim.** And
+ordering merges is not a merge queue: each PR's CI proved it green against the base as it was when
+CI ran, so two individually-green PRs can still break the base when both land. A real merge queue
+re-tests against the post-merge base; this does not. Dependency-aware scheduling and regenerating
+colliding generated sequences (migration numbers etc.) on the second merge also remain unbuilt.
 
 ## Config (`hamsterwheel.toml`)
 
-repo slug · project board (field + option NAMES, never hardcoded) · base branch · branch prefix · review bot name + blocking-severity regex · `[[human]]` rules (paths/labels) · `[scripts]` setup · worktree lanes · smoke/deploy hooks · allowed tools · runner+model+effort policy per role (default + validated label override) · session timeout · CI timeout · max review rounds · max iterations.
+repo slug · project board (field + option NAMES, never hardcoded) · base branch · branch prefix · review bot name + blocking-severity regex · `[[human]]` rules (paths/labels) · `[scripts]` setup · worktree lanes · smoke/deploy hooks · allowed tools · runner+model+effort policy per role (strong/cheap tier pairs, flat overrides, validated label override) · session timeout · CI timeout · max review rounds · max iterations.
 
 ## Observability
 

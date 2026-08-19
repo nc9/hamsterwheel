@@ -17,15 +17,27 @@ criteria_heading = "Acceptance Criteria"
 source_repos = ["acme/backend"]
 
 session_timeout_ms = 3600000 # kill a stalled implement session after 60m
-ci_timeout_ms = 900000 # give up waiting for checks after 15m (→ Blocked: ci-red)
+ci_timeout_ms = 900000 # give up waiting for checks after 15m (→ Blocked: ci-timeout, not ci-red)
 max_diff_bytes = 60000 # diff slice handed to the rubric grader
 max_iterations = 50 # `run` backstop: never loop forever
+# Commit with `-s` (a Signed-off-by trailer). Turn this on for any repo running a DCO check: it is
+# enforced per COMMIT, so without it every loop PR fails a gate whose error names the commit rather
+# than the config. The trailer has to match the commit's mailmap-applied author, so also set the
+# repo's `user.email` to whatever the mailmap resolves to — a mismatched identity can never pass.
+commit_signoff = false
 max_review_rounds = 4 # cap on stateless review-fix rounds; they never converge unbounded
 # worktree_root = "~/.hamsterwheel/worktrees"
 
 # Sessions run in persistent worktree "lanes" (lane-0…lane-N-1) reused across issues — node_modules
 # and caches stay warm; each acquire salvages leftovers, resets, re-branches off the fresh base and
 # re-copies .worktreeinclude files. >1 is reserved for parallel wave mode (accepted, currently inert).
+# Issues worked CONCURRENTLY, each in its own persistent worktree (lane-0…lane-N-1).
+# 1 = the serial loop: one issue start→merge→next, no locks allocated.
+# >1 = wave mode. Implement sessions (the 12-60m part) overlap; shared-repo git operations and the
+# final merge are serialized internally. A lane costs disk plus one cold `scripts.setup`, so size it
+# to what the machine can actually run at once — and remember API quota is spent per in-flight
+# pipeline, not per run. Do NOT run two driver processes against one board: the claim guard is a
+# read-then-write on the Owner field, not a compare-and-set, and only one process's lanes coordinate.
 worktree_lanes = 1
 
 # Scoped tool allow-list for a claude implement session. No blanket Bash(*) and no arbitrary-read
@@ -99,6 +111,10 @@ needs_human = "needs-human"
 needs_decision = "needs-decision"
 dep_open = "dep-open"
 ci_red = "ci-red"
+# CI never CONCLUDED, as opposed to concluding red — a fact about the runner fleet, not about the PR.
+# Defaults to whatever ci_red is set to, so a board provisioned without this option keeps working;
+# add a "ci-timeout" option to the board and set it here to separate them in the UI too.
+# ci_timeout = "ci-timeout"
 rubric_fail = "rubric-fail"
 
 # ---- review gate -----------------------------------------------------------------------------
@@ -119,17 +135,25 @@ blocking_severity_regex = "\\(\\s*(high|critical)\\s*\\)|🔴|\\[(critical|high)
 
 # ---- runner policy ---------------------------------------------------------------------------
 # Defaults per role. Per-issue `loop:*` labels override any axis (see the issue contract in your
-# CLAUDE.md / AGENTS.md). strong_model/cheap_model feed the built-in heuristic when no model is pinned:
+# CLAUDE.md / AGENTS.md). The strong/cheap PAIRS feed the built-in tier heuristic, applied per issue:
 # P0/P1 or size >= M → strong; XS or docs/test/chore/style/ci-shaped → cheap.
+#
+# Prefer the pairs over a flat `model`/`effort`. A flat value applies to EVERY issue and disables the
+# heuristic on that axis — `effort = "high"` spends high effort on an XS one-file change as readily as
+# on a redesign, and in a serial loop that is the largest single source of wall-clock. Setting a flat
+# value alongside its pair is a config error, not a silent override.
 [runners.implement]
 runner = "claude" # claude | codex | opencode
 strong_model = "opus"
 cheap_model = "sonnet"
 # model = "claude-opus-5"       # pin a model and the heuristic is skipped
-effort = "high" # claude: low|medium|high|xhigh|max · codex: minimal|low|medium|high · opencode: minimal|low|medium|high|max
+# effort vocabularies: claude low|medium|high|xhigh|max · codex minimal|low|medium|high · opencode minimal|low|medium|high|max
+strong_effort = "high"
+cheap_effort = "low"
 
 [runners.review]
 runner = "claude"
 strong_model = "opus"
 cheap_model = "sonnet"
-effort = "high"
+strong_effort = "high"
+cheap_effort = "low"

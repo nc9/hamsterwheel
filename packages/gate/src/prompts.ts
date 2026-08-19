@@ -31,6 +31,14 @@ export type ImplementPromptOptions = {
   verification?: string;
   /** Push instruction, incl. any repo-specific `--no-verify` note. Default: a plain `git push` of the branch. */
   pushInstruction?: string;
+  /**
+   * Set when the branch was started from a previous attempt's salvaged work rather than from the base.
+   * The session must be TOLD this: an agent that believes it is starting clean re-derives what is
+   * already committed under its feet, which is exactly the cost the resume exists to avoid.
+   */
+  resumedFrom?: string;
+  /** Commit with `-s`. Set for repos with a DCO check — see Config.commitSignoff. */
+  commitSignoff?: boolean;
 };
 
 /**
@@ -69,6 +77,8 @@ export function buildImplementPrompt(opts: ImplementPromptOptions): string {
     reviewInstruction = "Self-review your change and fix what you find.",
     verification = "Run the relevant typecheck and tests locally; they must pass.",
     pushInstruction,
+    resumedFrom,
+    commitSignoff,
   } = opts;
   const F = fence(issueNumber);
   const heading = `"## ${criteriaHeading}"`;
@@ -96,8 +106,26 @@ export function buildImplementPrompt(opts: ImplementPromptOptions): string {
     `2. ${reviewInstruction} Match surrounding code style. Add/adjust tests.`,
     `3. ${verification}`,
     `4. Commit with conventional commits referencing #${issueNumber}. You are already on branch ${branch}.`,
+    ...(commitSignoff
+      ? [
+          `   - Commit with \`git commit -s\` (EVERY commit). This repo runs a DCO check that rejects any`,
+          `     commit without a Signed-off-by trailer, and it is checked per commit, not per PR.`,
+        ]
+      : []),
+    ...(resumedFrom
+      ? [
+          ``,
+          `RESUMING: this branch does NOT start from a clean ${baseBranch}. It starts at ${resumedFrom} - the`,
+          `salvaged work of an earlier attempt at this same issue that was killed before it opened a PR.`,
+          `FIRST run \`git log --oneline ${baseBranch}..HEAD\` and \`git diff ${baseBranch}...HEAD\` to see what`,
+          `is already done, then finish the remaining criteria. Do not redo work that is already correct -`,
+          `and do not assume it is correct either: verify it against the criteria before building on it.`,
+        ]
+      : []),
     `5. ${push} Then open a PR: gh pr create -R ${repoSlug} --base ${baseBranch}`,
     `   - PR body MUST start with "Closes #${issueNumber}" and include the acceptance criteria as a checklist.`,
+    `   - Open it READY, never \`--draft\`: the merge gate cannot merge a draft, so a draft discards a`,
+    `     fully passing gate (CI, review, rubric) at the final step.`,
     `6. DO NOT merge. DO NOT apply any prod DB migration. DO NOT cut a release. Stop after the PR is open.`,
     ``,
     `If — and ONLY if — the change is ALREADY fully implemented in \`${baseBranch}\` and needs no code edits (a stale`,

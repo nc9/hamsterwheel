@@ -15,7 +15,8 @@ import {
   setBlocked,
   setStatus,
 } from "./board.ts";
-import { RunFatalError } from "./errors.ts";
+import { createLanePool, createMutex, runPooled } from "./concurrency.ts";
+import { RunFatalError, runFatalReason } from "./errors.ts";
 import type { Gh } from "./gh.ts";
 import { buildQueue, enrichItem, isEpic, type LoopIssue, type QueueSkip } from "./issues.ts";
 import { type LoopDeps, claimAndRun } from "./pipeline.ts";
@@ -300,21 +301,29 @@ export const renderReconcile = (
     );
 };
 
-/** `once` / `run`: work the queue. Serial by construction — one issue start→merge→next. */
+/**
+ * `once` / `run`: work the queue.
+ *
+ * `worktree_lanes = 1` (the default) runs exactly as it always did: one issue start→merge→next, on
+ * lane-0, with no locks allocated. Above 1 it runs that same per-issue pipeline on N lanes at once.
+ *
+ * What parallelism costs, and what pays it back:
+ *   - shared `.git` state (refs, worktree registry, `index.lock`) → a git lock around the shared-repo
+ *     half of lane acquire/release, deliberately not held across installs;
+ *   - concurrent merges to the base → a merge lock, so merges are ordered rather than interleaved;
+ *   - the claim guard is still a read-then-write on the Owner field, so it is NOT atomic. Within one
+ *     process that no longer matters — the shared cursor hands each issue to exactly one lane — but
+ *     two driver processes on the same board can still double-claim. Unchanged from serial; wave mode
+ *     just makes it easier to reach for a second driver, so: don't.
+ */
 export const workQueue = async (
   deps: CommandDeps,
   opts: { loop: boolean; execute: boolean; issue?: number },
 ): Promise<void> => {
   const { gh, cfg, ctx, log } = deps;
-  const loopDeps: LoopDeps = { ...deps };
-
-  // The config key ships ahead of wave mode so repos can prepare; only the pool size is inert.
-  if (cfg.worktreeLanes > 1)
-    log(
-      `  (worktree_lanes = ${cfg.worktreeLanes}: parallel lanes are not implemented yet — running serially on lane-0)`,
-    );
 
   if (opts.issue !== undefined) {
+    const loopDeps: LoopDeps = { ...deps };
     const { eligible } = await buildQueue(gh, cfg, await listItems(gh, ctx));
     const target = eligible.find((i) => i.number === opts.issue);
     if (!target)
@@ -325,49 +334,60 @@ export const workQueue = async (
     return;
   }
 
-  // An issue the tick declined to work (already claimed, rolled back to Ready) stays at the head of the
-  // queue, so without this the loop would re-pick it every tick until max_iterations. One attempt per
-  // issue per invocation.
-  const attempted = new Set<number>();
-  let iter = 0;
   // Built ONCE. Re-listing per tick pulls every item on the board plus a `gh issue view` for each Ready
   // one; on a 385-item board that exhausted the 5,000-point GraphQL budget after two claims and aborted
   // a serial run on `API rate limit exceeded`. Freshness is preserved where it matters by re-reading the
   // single item about to be claimed, below — O(1) instead of O(board) per tick.
   const { eligible } = await buildQueue(gh, cfg, await listItems(gh, ctx));
-  do {
-    // Backstop: never loop forever (e.g. an item that always rolls back to Ready).
-    if (++iter > cfg.maxIterations) {
-      log(`⚠ hit max_iterations (${cfg.maxIterations}) — stopping`);
-      break;
-    }
-    const next = eligible.find((i) => !attempted.has(i.number));
-    if (!next) {
-      log("queue empty — idle");
-      break;
-    }
-    attempted.add(next.number);
+
+  // `once` works exactly ONE issue and `run` drains the queue — the two arms of the old `do/while`.
+  // Slicing here preserves both, plus "one attempt per issue per invocation" and the max_iterations
+  // backstop, because a worker only ever takes an item the shared cursor has not already handed out.
+  const limit = opts.loop ? cfg.maxIterations : 1;
+  const queue = eligible.slice(0, limit);
+  if (opts.loop && eligible.length > queue.length)
+    log(
+      `  (max_iterations = ${cfg.maxIterations}: ${eligible.length - queue.length} eligible item(s) left for the next run)`,
+    );
+  if (!queue.length) {
+    log("queue empty — idle");
+    return;
+  }
+
+  // Never more lanes than there is work for them: an idle lane still costs a worktree and an install.
+  // `once` therefore always runs a single lane, with no locks — byte-identical to its old behavior.
+  const lanes = Math.max(1, Math.min(cfg.worktreeLanes, queue.length));
+  const loopDeps: LoopDeps = {
+    ...deps,
+    // Serial mode allocates no locks at all, so its behavior is byte-identical to before this change.
+    ...(lanes > 1 ? { gitLock: createMutex(), mergeLock: createMutex() } : {}),
+  };
+  if (lanes > 1) log(`  wave mode: ${lanes} lanes over ${queue.length} eligible issue(s)\n`);
+
+  /** Everything between taking an issue off the cursor and handing it to the pipeline. */
+  const claimOne = async (next: LoopIssue, lane: number): Promise<void> => {
+    // Lanes interleave their output, so in wave mode every line is tagged with the lane that wrote it.
+    // Without this the console is N pipelines' progress shuffled together and attributable to nothing.
+    // Serial mode keeps the untagged format it has always had.
+    const laneLog = lanes > 1 ? (m: string): void => log(`[L${lane}] ${m}`) : log;
+    const laneDeps: LoopDeps = lanes > 1 ? { ...loopDeps, log: laneLog } : loopDeps;
+
     // The snapshot can be minutes old by now, so confirm THIS item is still Ready and unclaimed before
-    // spending a session on it. Unreadable → skip: a failed check is not a passed check.
+    // spending a session on it. Unreadable → skip: a failed check is not a passed check. Under wave
+    // mode this is also what catches an item a PEER lane took since the queue was built.
     const live = await fetchItemState(gh, ctx, next.itemId);
-    if (!live) {
-      log(
+    if (!live)
+      return laneLog(
         `  ⤳ #${next.number} — could not re-read board state, skipping rather than claiming blind`,
       );
-      continue;
-    }
-    if (live.status !== cfg.board.status.ready) {
-      log(
+    if (live.status !== cfg.board.status.ready)
+      return laneLog(
         `  ⤳ #${next.number} moved to ${live.status ?? "(no status)"} since the queue was built — skipping`,
       );
-      continue;
-    }
-    if (live.owner?.trim()) {
-      log(
+    if (live.owner?.trim())
+      return laneLog(
         `  ⤳ #${next.number} claimed by run ${live.owner.trim()} since the queue was built — skipping`,
       );
-      continue;
-    }
     next.owner = live.owner;
     // Last free thing before the claim: is there enough GraphQL budget left to carry this issue to Done?
     // Running out MID-pipeline is the expensive shape — the item sits In Progress with a claim and maybe
@@ -376,18 +396,27 @@ export const workQueue = async (
     if (opts.execute) {
       const q = quotaVerdict(await fetchRateLimits(gh), {
         nowSeconds: Math.floor(Date.now() / 1000),
-        // The queue is already built and paid for, so only this issue's own pipeline is still owed.
-        graphqlFloor: PIPELINE_COST,
+        // The queue is already built and paid for, so only the in-flight pipelines are still owed —
+        // under wave mode that is one per lane, not one total. Reserving for a single pipeline while N
+        // run concurrently is how a wave runs dry mid-flight with N claims held.
+        graphqlFloor: PIPELINE_COST * lanes,
       });
       if (q.exhausted)
         throw new RunFatalError(
           `api-quota (${q.exhausted}) — stopping before claiming #${next.number}: ${q.detail}`,
           "nothing was claimed; relaunch after the reset and the queue picks up where it left off",
         );
-      if (q.level === "warn") log(`  ! quota: ${q.detail}`);
+      if (q.level === "warn") laneLog(`  ! quota: ${q.detail}`);
     }
-    // A run-fatal error would recur identically on every remaining item, so it aborts the run instead of
-    // walking the queue and blocking each item in turn. claimAndRun has already released its claim.
-    await claimAndRun(loopDeps, next, opts.execute);
-  } while (opts.loop);
+    await claimAndRun(laneDeps, next, opts.execute, lane);
+  };
+
+  // A run-fatal error would recur identically on every remaining item, so it stops the run instead of
+  // walking the queue and blocking each item in turn. claimAndRun has already released its own claim;
+  // lanes already in flight are left to finish, because they hold claims and possibly open PRs.
+  await runPooled(queue, lanes, claimOne, {
+    pool: createLanePool(lanes),
+    isFatal: (e) => e instanceof RunFatalError || runFatalReason(e) !== null,
+    onError: (e, item) => log(`  ✗ #${item.number}: ${String(e).slice(0, 200)}`),
+  });
 };

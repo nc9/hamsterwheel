@@ -69,7 +69,9 @@ Six independent axes, three per role. All optional.
 | `loop:review-runner-*` / `loop:review-model-*` / `loop:review-effort-*` | the same three for the rubric grader       |
 | `loop:model-<model>`                                                    | legacy alias for `loop:impl-model-*`       |
 
-Resolution per axis: **validated label → config default → heuristic → the runner's own default.** The heuristic sends P0/P1 or size ≥ M to the strong model, and XS or docs/test/chore/style/ci-shaped work to the cheap one.
+Resolution per axis: **validated label → config default → heuristic → the runner's own default.** The heuristic sends P0/P1 or size ≥ M to the strong tier, and XS or docs/test/chore/style/ci-shaped work to the cheap one.
+
+Both **model and effort** are tiered this way, via `strong_model`/`cheap_model` and `strong_effort`/`cheap_effort`. Configure the pairs, not the flat `model`/`effort`: a flat value applies to every issue and disables the heuristic on that axis. A run configured `effort = "high"` spent high effort on XS one-file changes and 4-file rule additions alike, which in a serial loop is the largest single source of wall-clock. Setting a flat value alongside its pair is a config error rather than a silent override.
 
 An invalid label falls back **silently and deliberately**. A typo that reached the spawn would exit non-zero and read as a generic implement failure, and you would debug the wrong thing for an hour.
 
@@ -95,7 +97,16 @@ The CLI is built to be driven headless — no command ever needs a human at the 
 
 ## Lanes: how sessions get a working copy
 
-Sessions never run in your checkout. Each issue runs in a **lane** — a persistent git worktree (`~/.hamsterwheel/worktrees/<repo>/lane-0`…) reused across issues so `node_modules` and build caches stay warm (the per-issue cost is an incremental setup, not a cold one). `worktree_lanes` in the config sizes the pool; values >1 are accepted but inert until parallel wave mode ships.
+Sessions never run in your checkout. Each issue runs in a **lane** — a persistent git worktree (`~/.hamsterwheel/worktrees/<repo>/lane-0`…) reused across issues so `node_modules` and build caches stay warm (the per-issue cost is an incremental setup, not a cold one).
+
+`worktree_lanes` sizes the pool AND sets how many issues run at once:
+
+- **`1` (default)** — the serial loop: one issue start→merge→next, no locks allocated.
+- **`>1` — wave mode.** Implement sessions overlap, which is where the wall-clock is (12-60 min each). Shared-repo git operations (`fetch`, `worktree add/prune`, checkout) take a git lock, and the final `gh pr merge` takes a merge lock, so those stay ordered; the parallelism is in the sessions. Each log line is tagged `[L<n>]`. `once` always runs a single lane regardless.
+
+Sizing: a lane costs disk plus one cold `scripts.setup`, so match it to what the machine can genuinely run concurrently. GitHub API quota is consumed per in-flight pipeline, and the pre-claim quota floor scales with lane count accordingly.
+
+**Never run two driver processes against one board.** The claim guard is a read-then-write on the Owner field, not a compare-and-set (Projects v2 has no conditional field update). One process's lanes coordinate through a shared cursor; two processes do not, and will double-claim. Ordering merges is also not a merge queue: two individually-green PRs can still break the base when both land, because neither was tested against the other's result.
 
 After every acquire hamster runs the configured setup script — `[scripts]` `setup` in `hamsterwheel.toml` (Conductor-style lifecycle table; `run`/`archive`/`maintenance` are reserved). It is argv-exec'd with **no shell** (pipes/`&&` belong in a repo script the config points at) and receives context env vars: `HAMSTER_WORKSPACE_PATH` (lane dir), `HAMSTER_WORKSPACE_NAME` (`lane-0`), `HAMSTER_ROOT_PATH` (primary checkout), `HAMSTER_LANE_COLD` (`1` fresh worktree / `0` warm reuse), `HAMSTER_ISSUE`, `HAMSTER_RUN_ID`. No `setup` configured → no setup step. The old `install_cmd` key is a hard config error. `hamster init` pre-fills `setup` from existing conventions when it can (`conductor.json` `scripts.setup`, `.cursor/environment.json` `install`, a `scripts/setup.sh`, or the lockfile's package manager) — detection happens only at init; the runtime obeys the explicit config alone.
 
@@ -117,7 +128,7 @@ Files are re-copied fresh on every acquire (copies, never symlinks — a session
 ```bash
 hamster once --execute --issue 42 --pr-only   # one issue, stop at the PR
 hamster once --execute                        # one issue, full gate
-hamster run  --execute                        # until the Ready queue is empty (serial)
+hamster run  --execute                        # until the Ready queue is empty (serial, or N-wide with worktree_lanes)
 hamster run  --execute --sandbox              # sessions OS-isolated in docker
 ```
 

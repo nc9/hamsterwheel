@@ -58,6 +58,7 @@ export {
   type PolicyDefaults,
   LABEL_PREFIXES,
   sessionTier,
+  pickSessionEffort,
   pickSessionModel,
   resolveSessionPolicy,
   formatSessionPlan,

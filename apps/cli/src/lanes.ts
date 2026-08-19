@@ -159,50 +159,88 @@ export const acquireLane = async (opts: {
   repoRoot: string;
   /** Sandbox installs in-container; the host-side setup script is skipped there. */
   skipSetup?: boolean;
+  /**
+   * A prior attempt's salvage branch to START THIS BRANCH AT instead of the base ref. Salvage already
+   * made a killed run's work durable, but nothing ever read it back: a run that died mid-session left a
+   * WIP branch and the next run began from scratch. #1371 was claimed three times across three runs and
+   * three full implement sessions, delivered nothing, and is still open; #1361 was implemented twice.
+   * Resuming makes salvage load-bearing rather than an archive nobody opens.
+   */
+  resumeFrom?: string;
+  /**
+   * Serializes the operations that touch the SHARED repository rather than this lane's own directory:
+   * `fetch`, `worktree prune`, `worktree add` and branch checkout all write `.git` state (refs, the
+   * worktree registry, `index.lock`) that every lane shares. Without it, concurrent lanes lose to
+   * `index.lock` contention, and `worktree prune` racing a peer's `worktree add` can deregister a
+   * directory that peer is about to use.
+   *
+   * Deliberately NOT held across `.worktreeinclude` copying or `scripts.setup`: those touch only this
+   * lane's directory, and the package install is the slowest step in an acquire — holding a global
+   * lock through it would serialize the very thing wave mode exists to parallelize.
+   *
+   * Omitted in serial mode, where there is nothing to serialize against.
+   */
+  gitLock?: { run: <T>(fn: () => Promise<T>) => Promise<T> };
   log: (m: string) => void;
 }): Promise<LaneAcquisition> => {
   const { cfg, branch, log } = opts;
   const dir = laneDir(cfg, opts.lane);
   const baseRef = `origin/${cfg.baseBranch}`;
-  await fetchBase(cfg.baseBranch);
+  // Where the work branch starts. The resume ref already contains the base it was cut from, so its
+  // own history carries the prior work forward; base drift past it is handled downstream by diffing
+  // against the merge-base rather than origin/<base>.
+  const startRef = opts.resumeFrom ?? baseRef;
+  const withGit = opts.gitLock
+    ? opts.gitLock.run
+    : async <T>(fn: () => Promise<T>): Promise<T> => fn();
 
   let created = false;
   let recovered: string | null = null;
-  if (!(await isWorktree(dir))) {
-    await pruneWorktrees(); // dir-less registrations block `worktree add -B`
-    await addWorktree(worktreeAddArgs(dir, branch, baseRef));
-    created = true;
-  } else {
-    const wip = wipBranchName(
-      opts.issueNumber,
-      `lane${opts.lane}-recovered-${opts.runId}`,
-      cfg.branchPrefix,
-    );
-    // Dirty vs the lane's OWN HEAD, not the base: a released lane sits detached at an old base, and a
-    // freshly-fetched base would make staleness read as "changes". Only real leftovers count.
-    if (await worktreeHasChanges(dir, "HEAD")) {
-      recovered = await preserveWorktreeChanges(dir, wip, "HEAD");
-      // A dirty lane whose salvage failed is unrecoverable work about to be destroyed — refuse.
-      if (!recovered)
-        throw new Error(
-          `lane ${dir} has uncommitted leftovers and salvage failed — refusing to reset; recover it by hand`,
-        );
-      log(`  ♻ lane-${opts.lane}: leftover work salvaged to ${recovered}`);
-    } else if ((await currentBranch(dir)) === branch && (await aheadCount(dir, baseRef)) > 0) {
-      // A crashed run can leave the lane ATTACHED to this same branch with committed-but-unpushed
-      // work and a clean tree. `checkout -B` below resets the branch ref — park the commits on the
-      // run-scoped WIP branch first. (A different leftover branch keeps its commits on its own ref.)
-      await forceBranchAt(dir, wip);
-      recovered = wip;
-      log(`  ♻ lane-${opts.lane}: unpushed commits on ${branch} preserved on ${wip}`);
+
+  // Everything from here to `unsetUpstream` writes SHARED repository state — refs, the worktree
+  // registry, `index.lock` — not just this lane's directory, so it runs under the git lock.
+  await withGit(async () => {
+    await fetchBase(cfg.baseBranch);
+
+    if (!(await isWorktree(dir))) {
+      await pruneWorktrees(); // dir-less registrations block `worktree add -B`
+      await addWorktree(worktreeAddArgs(dir, branch, startRef));
+      created = true;
+    } else {
+      const wip = wipBranchName(
+        opts.issueNumber,
+        `lane${opts.lane}-recovered-${opts.runId}`,
+        cfg.branchPrefix,
+      );
+      // Dirty vs the lane's OWN HEAD, not the base: a released lane sits detached at an old base, and a
+      // freshly-fetched base would make staleness read as "changes". Only real leftovers count.
+      if (await worktreeHasChanges(dir, "HEAD")) {
+        recovered = await preserveWorktreeChanges(dir, wip, "HEAD");
+        // A dirty lane whose salvage failed is unrecoverable work about to be destroyed — refuse.
+        if (!recovered)
+          throw new Error(
+            `lane ${dir} has uncommitted leftovers and salvage failed — refusing to reset; recover it by hand`,
+          );
+        log(`  ♻ lane-${opts.lane}: leftover work salvaged to ${recovered}`);
+      } else if ((await currentBranch(dir)) === branch && (await aheadCount(dir, baseRef)) > 0) {
+        // A crashed run can leave the lane ATTACHED to this same branch with committed-but-unpushed
+        // work and a clean tree. `checkout -B` below resets the branch ref — park the commits on the
+        // run-scoped WIP branch first. (A different leftover branch keeps its commits on its own ref.)
+        await forceBranchAt(dir, wip);
+        recovered = wip;
+        log(`  ♻ lane-${opts.lane}: unpushed commits on ${branch} preserved on ${wip}`);
+      }
+      await resetHard(dir);
+      await cleanUntracked(dir);
+      await checkoutBranch(dir, branch, startRef);
     }
-    await resetHard(dir);
-    await cleanUntracked(dir);
-    await checkoutBranch(dir, branch, baseRef);
-  }
-  // Same direct-to-main mechanism as worktree add: `checkout -B <br> origin/<base>` inherits an
-  // upstream, and with push.default=upstream an unpinned push then writes the BASE branch.
-  await unsetUpstream(dir);
+    // Same direct-to-main mechanism as worktree add: `checkout -B <br> origin/<base>` inherits an
+    // upstream, and with push.default=upstream an unpinned push then writes the BASE branch.
+    await unsetUpstream(dir);
+  });
+
+  if (opts.resumeFrom)
+    log(`  ↻ lane-${opts.lane}: resuming from salvaged work on ${opts.resumeFrom}`);
 
   const includes = await copyIncludes(opts.repoRoot, dir);
   if (includes.length)
@@ -231,8 +269,15 @@ export const acquireLane = async (opts: {
  * leave the dir in place for the next acquire. Best-effort: a dirty tree can make the detach fail,
  * and the next acquire's salvage-first path handles whatever is left.
  */
-export const releaseLane = async (cfg: Config, lane: number): Promise<void> => {
+export const releaseLane = async (
+  cfg: Config,
+  lane: number,
+  gitLock?: { run: <T>(fn: () => Promise<T>) => Promise<T> },
+): Promise<void> => {
   const dir = laneDir(cfg, lane);
   if (!(await isWorktree(dir))) return;
-  await detachHead(dir, `origin/${cfg.baseBranch}`).catch(() => {});
+  // Same shared-`.git` reasoning as the acquire: the detach rewrites this worktree's HEAD through the
+  // shared repository, so it takes the same lock.
+  const withGit = gitLock ? gitLock.run : async <T>(fn: () => Promise<T>): Promise<T> => fn();
+  await withGit(() => detachHead(dir, `origin/${cfg.baseBranch}`).catch(() => {}));
 };

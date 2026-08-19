@@ -172,3 +172,30 @@ describe("buildRubricPrompt", () => {
     expect(buildRubricPrompt(baseRubric)).toContain("truncated to 60k");
   });
 });
+
+describe("commitSignoff", () => {
+  const opts = {
+    issueNumber: 1574,
+    issueTitle: "links/anchor-text counts per link",
+    issueBody: "## Acceptance Criteria\n- [ ] counts per pair",
+    repoSlug: "squirrelscan/squirrelscan",
+    branch: "loop/1574-anchor-text",
+  };
+
+  /**
+   * A DCO check rejects per COMMIT, not per PR, and its failure names the commit rather than the
+   * config — so a loop pointed at a DCO repo without this produces a PR that can never merge and an
+   * error that reads as an agent mistake.
+   */
+  test("instructs `git commit -s` when set", () => {
+    const p = buildImplementPrompt({ ...opts, commitSignoff: true });
+    expect(p).toContain("git commit -s");
+    expect(p).toContain("Signed-off-by");
+  });
+
+  test("says nothing about sign-off when unset — the default repo has no DCO", () => {
+    const p = buildImplementPrompt(opts);
+    expect(p).not.toContain("git commit -s");
+    expect(p).not.toContain("Signed-off-by");
+  });
+});

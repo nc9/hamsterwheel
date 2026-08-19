@@ -287,3 +287,23 @@ describe("loadConfig / findConfig", () => {
     expect(await findConfig(`${tmpdir()}/hw-cfg-none-${crypto.randomUUID()}`)).toBeNull();
   });
 });
+
+describe("commit_signoff", () => {
+  test("defaults to false", () => {
+    expect(parseConfig(minimal(), { home: "/h" }).commitSignoff).toBe(false);
+  });
+
+  test("reads a boolean", () => {
+    expect(parseConfig(withOver({ commit_signoff: true }), { home: "/h" }).commitSignoff).toBe(
+      true,
+    );
+  });
+
+  /**
+   * A string here must NOT coerce. Silently falling back to false would produce PRs that fail DCO on
+   * every commit with nothing in the config pointing at the cause.
+   */
+  test("rejects a non-boolean instead of coercing", () => {
+    expect(() => parseConfig(withOver({ commit_signoff: "true" }), { home: "/h" })).toThrow();
+  });
+});

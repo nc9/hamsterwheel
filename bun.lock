@@ -5,6 +5,10 @@
     "": {
       "name": "hamsterwheel-workspace",
       "devDependencies": {
+        "@hamsterwheel/config": "workspace:*",
+        "@hamsterwheel/gate": "workspace:*",
+        "@hamsterwheel/runners": "workspace:*",
+        "@hamsterwheel/sandbox": "workspace:*",
         "@typescript/native-preview": "^7.0.0-dev.20260707.2",
         "bun-types": "^1.3.14",
         "oxfmt": "^0.60.0",

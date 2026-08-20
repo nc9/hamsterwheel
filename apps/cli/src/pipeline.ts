@@ -444,6 +444,7 @@ export const runRubric = async (
     outputSchemaPath: schemaPath,
     sandbox: deps.sandbox,
     log: deps.log,
+    onHeartbeat: () => deps.status?.heartbeat(),
   });
   if (schemaPath) await rm(schemaPath, { force: true }).catch(() => {});
   if (out.timedOut) throw new Error("rubric session timed out");
@@ -503,6 +504,7 @@ const runReviewRounds = async (
       bypassPermissions: deps.bypassPermissions,
       sandbox: deps.sandbox,
       log,
+      onHeartbeat: () => deps.status?.heartbeat(),
     });
     if (out.timedOut)
       throw new Error(`review-fix session (round ${round}) exceeded the session timeout — killed`);
@@ -824,6 +826,9 @@ export const runImplement = async (
     bypassPermissions: deps.bypassPermissions,
     sandbox: deps.sandbox,
     log,
+    // THE call site that mattered: the implement session is the longest phase and appends nothing to
+    // the run log while it works, so without this every healthy run read as `stale` within 3 minutes.
+    onHeartbeat: () => deps.status?.heartbeat(),
   });
   if (out.timedOut)
     throw new Error(

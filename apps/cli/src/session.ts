@@ -51,7 +51,20 @@ export type SessionOptions = {
   sandbox?: boolean;
   env?: Record<string, string | undefined>;
   log?: (msg: string) => void;
+  /**
+   * Called periodically while the child runs, so a live session is distinguishable from a wedged one.
+   *
+   * This is the phase that needed it most and had it least. An implement session is the longest thing
+   * the loop does — tens of minutes — and it appends nothing to the run log while it works, so before
+   * this the status file went untouched for the whole session and `hamster status` reported a perfectly
+   * healthy run as `stale`. A monitoring signal that cries wolf on every normal run is worse than none:
+   * it got acted on, and a live run's claim was released out from under it.
+   */
+  onHeartbeat?: () => void;
 };
+
+/** How often a running session touches the status file. Well under the default 180s stale threshold. */
+export const SESSION_HEARTBEAT_MS = 30_000;
 
 export type SessionResult = RunnerOutput & { timedOut: boolean; stderr: string };
 
@@ -133,11 +146,20 @@ export const runSession = async (opts: SessionOptions): Promise<SessionResult> =
   }
 
   const [cmd, ...rest] = argv;
-  const { stdout, stderr, exitCode, timedOut } = await run(cmd!, rest, {
-    cwd: opts.cwd,
-    env: spawnEnv,
-    timeoutMs: opts.timeoutMs,
-  });
-  const parsed = parseRunnerOutput(opts.plan.runner, { stdout, exitCode });
-  return { ...parsed, stderr, timedOut };
+  // `unref` so a pending tick can never hold the process open past the session it was measuring.
+  const ticker = opts.onHeartbeat
+    ? setInterval(opts.onHeartbeat, SESSION_HEARTBEAT_MS).unref?.() ??
+      setInterval(opts.onHeartbeat, SESSION_HEARTBEAT_MS)
+    : undefined;
+  try {
+    const { stdout, stderr, exitCode, timedOut } = await run(cmd!, rest, {
+      cwd: opts.cwd,
+      env: spawnEnv,
+      timeoutMs: opts.timeoutMs,
+    });
+    const parsed = parseRunnerOutput(opts.plan.runner, { stdout, exitCode });
+    return { ...parsed, stderr, timedOut };
+  } finally {
+    if (ticker) clearInterval(ticker as unknown as ReturnType<typeof setInterval>);
+  }
 };

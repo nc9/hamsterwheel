@@ -1,6 +1,7 @@
 import type { Config } from "@hamsterwheel/config";
 import {
   type SessionPlan,
+  describeHumanClaim,
   formatSessionPlan,
   matchHumanRules,
   resolveSessionPolicy,
@@ -9,6 +10,7 @@ import {
 import {
   type BoardItem,
   addItem,
+  clearOwner,
   comment,
   fetchItemState,
   listItems,
@@ -18,7 +20,14 @@ import {
 import { createLanePool, createMutex, runPooled } from "./concurrency.ts";
 import { RunFatalError, runFatalReason } from "./errors.ts";
 import type { Gh } from "./gh.ts";
-import { buildQueue, enrichItem, isEpic, type LoopIssue, type QueueSkip } from "./issues.ts";
+import {
+  buildQueue,
+  enrichItem,
+  isEpic,
+  isOpen,
+  type LoopIssue,
+  type QueueSkip,
+} from "./issues.ts";
 import { type LoopDeps, claimAndRun } from "./pipeline.ts";
 import { PIPELINE_COST, fetchRateLimits, quotaVerdict } from "./quota.ts";
 
@@ -140,8 +149,10 @@ export const renderPlan = (r: PlanReport, log: (m: string) => void): void => {
 
 export type AutoBlockAction = {
   issue: number;
-  reason: "injection" | "no-criteria";
+  reason: "injection" | "no-criteria" | "human-claim";
   markers?: string[];
+  /** human-claim: the login (or label) the claim was read from. */
+  who?: string;
 };
 
 /** Auto-block passes: missing acceptance criteria, and suspected prompt injection. Mutates the board. */
@@ -170,6 +181,21 @@ export const runTriagePasses = async (deps: CommandDeps): Promise<AutoBlockActio
         markers: iss.injection,
       });
       actions.push({ issue: iss.number, reason: "injection", markers: iss.injection });
+      continue;
+    }
+    // A person has this one. Park it and say nothing on the issue itself: the maintainer needs to know,
+    // the volunteer does not need a bot posting into the thread they just volunteered in.
+    if (iss.humanClaim) {
+      await setBlocked(gh, ctx, cfg, item.id, cfg.board.blockedReasons.needsHuman);
+      log(
+        `#${iss.number}: Blocked → ${cfg.board.blockedReasons.needsHuman} (${describeHumanClaim(iss.humanClaim)})`,
+      );
+      deps.runLog.append("triage-block", {
+        issue: iss.number,
+        reason: "human-claim",
+        claim: iss.humanClaim,
+      });
+      actions.push({ issue: iss.number, reason: "human-claim", who: iss.humanClaim.who });
       continue;
     }
     if (!iss.hasCriteria) {
@@ -269,23 +295,67 @@ export const renderTriage = (
 
 export type ReconcileReport = {
   inflight: { number: number | null; status: string; owner: string | null }[];
+  /**
+   * Items sitting in Done whose issue is OPEN again. Reopening is how a human says "not actually
+   * finished", and the board cannot see it — the item stays Done forever and the issue never returns to
+   * the queue. Reported, never auto-fixed: only the human who reopened it knows which way it should go.
+   */
+  doneButOpen: number[];
+  /** Set by `--release <n>`: the claim that was actually released. */
+  released?: { number: number; from: string };
 };
 
-/** Report items stuck in flight with no live session behind them. Read-only: a human decides. */
-export const reconcile = async (deps: CommandDeps): Promise<ReconcileReport> => {
+/**
+ * Report items stuck in flight with no live session behind them, plus Done items whose issue reopened.
+ *
+ * Read-only by default — reconciliation after a crashed driver is a human's call. `--release <n>`
+ * executes that call once made, because doing it by hand is a footgun: the reset needs BOTH halves
+ * (status → Ready AND clear the Owner), and an item left Ready with a live-looking Owner is skipped by
+ * the claim guard on every future run, leaking the issue out of the queue silently and permanently.
+ */
+export const reconcile = async (
+  deps: CommandDeps,
+  releaseIssue?: number,
+): Promise<ReconcileReport> => {
   const { gh, cfg, ctx } = deps;
-  const inflight = (await listItems(gh, ctx)).filter(
+  const items = await listItems(gh, ctx);
+  const ownerOf = (i: BoardItem): string | null =>
+    typeof i.fields[cfg.board.ownerField.toLowerCase()] === "string"
+      ? (i.fields[cfg.board.ownerField.toLowerCase()] as string)
+      : null;
+  const inflight = items.filter(
     (i) => i.status === cfg.board.status.inProgress || i.status === cfg.board.status.inReview,
   );
+
+  let released: { number: number; from: string } | undefined;
+  if (releaseIssue !== undefined) {
+    const item = items.find((i) => i.content?.number === releaseIssue);
+    if (!item) throw new Error(`#${releaseIssue} is not on the board`);
+    const from = item.status ?? "(none)";
+    await setStatus(gh, ctx, item.id, cfg.board.status.ready);
+    await clearOwner(gh, ctx, item.id);
+    released = { number: releaseIssue, from };
+    deps.runLog.append("claim-released", { issue: releaseIssue, from });
+  }
+
+  const doneButOpen: number[] = [];
+  for (const i of items.filter((x) => x.status === cfg.board.status.done)) {
+    const n = i.content?.number;
+    // `items` is the pre-release snapshot, so an item just moved OFF Done by --release is still Done
+    // here — reporting it as drift would tell the operator to undo what they just asked for.
+    if (n === releaseIssue) continue;
+    if (n && i.content?.repository === cfg.repo && (await isOpen(gh, cfg.repo, n)))
+      doneButOpen.push(n);
+  }
+
   return {
     inflight: inflight.map((i) => ({
       number: i.content?.number ?? null,
       status: i.status ?? "(none)",
-      owner:
-        typeof i.fields[cfg.board.ownerField.toLowerCase()] === "string"
-          ? (i.fields[cfg.board.ownerField.toLowerCase()] as string)
-          : null,
+      owner: ownerOf(i),
     })),
+    doneButOpen,
+    released,
   };
 };
 
@@ -294,10 +364,19 @@ export const renderReconcile = (
   cfg: Config,
   log: (m: string) => void,
 ): void => {
-  if (!r.inflight.length) return log("reconcile: nothing in flight");
+  if (r.released)
+    log(
+      `  ✔ released #${r.released.number}: ${r.released.from} → ${cfg.board.status.ready}, ${cfg.board.ownerField} cleared`,
+    );
+  if (!r.inflight.length && !r.doneButOpen.length && !r.released)
+    return log("reconcile: nothing in flight");
   for (const it of r.inflight)
     log(
-      `  in-flight: #${it.number} [${it.status}] — verify a live run owns it (${cfg.board.ownerField} field${it.owner ? `: ${it.owner}` : ""}), else reset to ${cfg.board.status.ready}`,
+      `  in-flight: #${it.number} [${it.status}] — verify a live run owns it (${cfg.board.ownerField} field${it.owner ? `: ${it.owner}` : ""}), else \`hamster reconcile --release ${it.number}\``,
+    );
+  for (const n of r.doneButOpen)
+    log(
+      `  drift: #${n} is ${cfg.board.status.done} but the issue is OPEN again — move it back to ${cfg.board.status.ready} to rework it, or close the issue`,
     );
 };
 

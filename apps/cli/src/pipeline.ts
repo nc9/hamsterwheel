@@ -7,6 +7,7 @@ import {
   buildImplementPrompt,
   buildRubricPrompt,
   classifyImplement,
+  describeHumanClaim,
   fence,
   matchHumanRules,
   mergeDecision,
@@ -25,7 +26,7 @@ import { type BoardCtx, clearOwner, comment, setBlocked, setOwner, setStatus } f
 import { RunFatalError, runFatalReason } from "./errors.ts";
 import type { Gh } from "./gh.ts";
 import { baseRefFor, gitToplevel, localBranches, staleBaseFiles } from "./git.ts";
-import { type LoopIssue, branchName, findPriorClosingPr } from "./issues.ts";
+import { type LoopIssue, branchName, findPriorClosingPr, recheckHumanClaim } from "./issues.ts";
 import { acquireLane, laneDir, releaseLane } from "./lanes.ts";
 import type { Mutex } from "./concurrency.ts";
 import type { StatusWriter } from "./status.ts";
@@ -921,6 +922,19 @@ export const claimAndRun = async (
   // actually makes double-claims impossible; this only stops a second driver or a leftover claim being stomped.
   if (iss.owner?.trim()) {
     log(`  ⤳ #${iss.number} already claimed by run ${iss.owner.trim()} — skipping`);
+    return;
+  }
+
+  // Second half of the community guard: the queue's read may be stale by however long the other lanes
+  // took, and "someone volunteered while we were busy" is exactly the case worth catching late.
+  const claim = await recheckHumanClaim(gh, cfg, iss.number, iss.labels);
+  if (claim) {
+    await setBlocked(gh, ctx, cfg, iss.itemId, cfg.board.blockedReasons.needsHuman);
+    log(
+      `  ⏸ #${iss.number} → Blocked: ${cfg.board.blockedReasons.needsHuman} (${describeHumanClaim(claim)})`,
+    );
+    deps.runLog.append("blocked", { issue: iss.number, reason: "human-claim", claim });
+    deps.status?.count("blocked");
     return;
   }
 

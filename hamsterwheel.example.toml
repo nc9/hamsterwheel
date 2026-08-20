@@ -26,6 +26,18 @@ max_iterations = 50 # `run` backstop: never loop forever
 # repo's `user.email` to whatever the mailmap resolves to — a mismatched identity can never pass.
 commit_signoff = false
 max_review_rounds = 4 # cap on stateless review-fix rounds; they never converge unbounded
+# Yield an issue a PERSON has claimed: assigned to someone, commented on by anyone outside the org, or
+# carrying `hands_off_label`. Any of those parks it as Blocked: needs-human instead of working it.
+#
+# On a public repo the comment is the signal that matters — a contributor without write access cannot
+# self-assign, so "I'd like to work on this" is the only way they can call an issue. Without this the
+# loop cannot see them at all: it reads title, body and labels, and an issue someone volunteered for
+# looks exactly like an untouched one. Deliberately blunt (a bare "+1" blocks): a false positive costs
+# you seconds, a false negative costs a contributor their afternoon.
+#
+# On a private board every commenter is in-org, so it is silent — leave it on.
+community_guard = true
+hands_off_label = "loop:hands-off" # never worked by the loop, whoever else has touched it
 # worktree_root = "~/.hamsterwheel/worktrees"
 
 # Sessions run in persistent worktree "lanes" (lane-0…lane-N-1) reused across issues — node_modules

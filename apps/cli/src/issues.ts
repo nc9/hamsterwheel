@@ -1,7 +1,10 @@
 import type { Config } from "@hamsterwheel/config";
 import {
   compareIssues,
+  describeHumanClaim,
+  detectHumanClaim,
   hasAcceptanceCriteria,
+  type HumanClaim,
   isEpicTitle,
   parseDeps,
   priorityRank,
@@ -25,6 +28,8 @@ export type LoopIssue = {
   deps: number[];
   /** Tripped prompt-injection markers (empty = clean). Non-empty is a hard stop, never a warning. */
   injection: string[];
+  /** A person has this one: assigned, commented from outside the org, or hands-off labelled. */
+  humanClaim: HumanClaim | null;
   itemId: string;
   owner?: string;
   /** Issue state from GitHub. The BOARD drifts (items linger Ready after shipping); the issue does not. */
@@ -37,6 +42,8 @@ type IssueView = {
   labels: { name: string }[];
   createdAt: string;
   state: string;
+  assignees?: { login: string }[];
+  comments?: { author?: { login?: string }; authorAssociation?: string }[];
 };
 
 export const enrichItem = async (
@@ -48,6 +55,12 @@ export const enrichItem = async (
   // Items from other repos (a public triage inbox synced onto the same board) are visible but never
   // worked — the loop only has a worktree for its own repo.
   if (!num || item.content?.repository !== cfg.repo) return null;
+  // `assignees,comments` ride along on the SAME view call the loop already makes, so the community
+  // guard costs no extra API request — which matters, since this runs per Ready item on every tick and
+  // the quota model scales with board size.
+  const fields = cfg.communityGuard
+    ? "title,body,labels,createdAt,state,assignees,comments"
+    : "title,body,labels,createdAt,state";
   const d = await gh.json<IssueView>([
     "issue",
     "view",
@@ -55,7 +68,7 @@ export const enrichItem = async (
     "-R",
     cfg.repo,
     "--json",
-    "title,body,labels,createdAt,state",
+    fields,
   ]);
   const labels = d.labels.map((l) => l.name);
   const body = d.body ?? "";
@@ -70,10 +83,59 @@ export const enrichItem = async (
     hasCriteria: hasAcceptanceCriteria(body, cfg.criteriaHeading),
     deps: parseDeps(body),
     injection: screenInjection(`${d.title}\n${body}`),
+    humanClaim: cfg.communityGuard
+      ? detectHumanClaim(
+          (d.assignees ?? []).map((a) => a.login),
+          (d.comments ?? []).map((c) => ({
+            author: c.author?.login ?? "",
+            association: c.authorAssociation ?? "NONE",
+          })),
+          labels,
+          cfg.handsOffLabel,
+        )
+      : null,
     itemId: item.id,
     owner: itemField(item, cfg.board.ownerField),
     state: d.state?.toUpperCase() === "CLOSED" ? "CLOSED" : "OPEN",
   };
+};
+
+/**
+ * Re-read the human-claim signal at the moment of claiming.
+ *
+ * The queue is built once per tick, and in wave mode a lane can pick up an issue that has been sitting
+ * in that queue for as long as the other lanes took — plenty of time for someone to comment "I'll take
+ * this". One view call per CLAIM (not per board item) buys back that window.
+ *
+ * Fails OPEN on a network error: a lookup failure must not stall the loop, and the same check already
+ * ran when the queue was built.
+ */
+export const recheckHumanClaim = async (
+  gh: Gh,
+  cfg: Config,
+  num: number,
+  labels: string[],
+): Promise<HumanClaim | null> => {
+  if (!cfg.communityGuard) return null;
+  const d = await gh.tryJson<IssueView>([
+    "issue",
+    "view",
+    String(num),
+    "-R",
+    cfg.repo,
+    "--json",
+    "assignees,comments",
+  ]);
+  if (!d) return null;
+  return detectHumanClaim(
+    (d.assignees ?? []).map((a) => a.login),
+    (d.comments ?? []).map((c) => ({
+      author: c.author?.login ?? "",
+      association: c.authorAssociation ?? "NONE",
+    })),
+    labels,
+    cfg.handsOffLabel,
+  );
 };
 
 export const isOpen = async (gh: Gh, repo: string, num: number): Promise<boolean> =>
@@ -167,6 +229,15 @@ export const buildQueue = async (gh: Gh, cfg: Config, items: BoardItem[]): Promi
     // whole session re-doing shipped work, so cross-check the issue state, which never drifts.
     if (iss.state === "CLOSED") {
       skipped.push({ num: iss.number, why: "issue is CLOSED — board drift; move it to Done" });
+      continue;
+    }
+    // Before anything about the issue's own quality: if a person has it, it is not the loop's to take,
+    // and nagging them about a missing checklist would be the wrong conversation.
+    if (iss.humanClaim) {
+      skipped.push({
+        num: iss.number,
+        why: `${describeHumanClaim(iss.humanClaim)} → ${cfg.board.blockedReasons.needsHuman}`,
+      });
       continue;
     }
     if (!iss.hasCriteria) {

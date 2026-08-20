@@ -97,6 +97,31 @@ it actually parsed; if you do not see that line, it did not.
 
 Also required for eligibility: a priority label (`P0`–`P3`) and a size label (`size: XS`–`size: XL`). Unsized defaults to expensive, which is the right way round.
 
+## Working alongside people
+
+**An issue a person has claimed is not the loop's to take.** The community guard (`community_guard`,
+on by default) parks an issue as `Blocked: needs-human` on any of three signals: a non-bot assignee, a
+comment from anyone outside the org, or the `hands_off_label` (`loop:hands-off`).
+
+On a public repo the **comment** is the signal that matters. A drive-by contributor has no write
+access, so they cannot self-assign — "I'd like to work on this" in a comment is the only way they can
+call an issue, and it is the one thing a loop reading title/body/labels is blind to. That blindness
+has a cost that is easy to underrate: a contributor commented with an accurate plan of attack, and
+twenty-two minutes later the loop claimed the same issue and merged essentially that plan inside the
+hour. Nothing was broken. The work was good. The contributor was simply gone.
+
+The check is deliberately blunt — a bare "+1" blocks the issue. Waving it through costs you seconds;
+missing one costs someone their afternoon and the project a contributor.
+
+**This changes what you must do before putting a public issue on the board.** Read the comments
+yourself. `plan` reports the guard's verdict per issue, so a blocked-for-human line is the loop
+telling you a conversation is already happening on that issue and you should be the one having it.
+
+The loop deliberately posts **no comment** when it parks an issue this way. You need to know; the
+person who just volunteered does not need a bot replying to them.
+
+On a private board every commenter is in-org, so the guard is silent and costs nothing. Leave it on.
+
 ## Labels: runner, model, effort
 
 Six independent axes, three per role. All optional.
@@ -231,6 +256,9 @@ so `stale` means the heartbeat aged out: the run died, or a phase is wedged. It 
 state, so `hamster status --json >/dev/null || alert` is a complete watchdog. `ended` is distinct
 from `stale` — a finished run stamps `endedAt`, so "finished 20m ago" never reads as "died 20m ago".
 
+Watch the pipe, though: `hamster status | tail` reports the exit code of `tail`, so a stale run comes
+back 0 and a watchdog built that way never fires. Redirect instead of piping, or check `PIPESTATUS`.
+
 Each lane reports its `phase` (`claiming`, `implementing`, `ci-wait`, `review-fix`, `rubric`,
 `merging`) and the time it entered it. A phase's `since` is entry time, not last touch, so a lane
 stuck 50 minutes in `ci-wait` is visible even while the run is healthily heartbeating.
@@ -260,6 +288,14 @@ Poll `status`. On `stale`, stop and diagnose rather than relaunching — a secon
 board double-claims. Read the gate's reason on anything that parks: `ci-red` is a defect in the PR,
 `ci-timeout` is not, `needs-human` means a tripwire fired and the batch may now contain merged work
 that depends on the parked change. When the queue drains, reconcile anything the run left In Review.
+
+**A dead run leaves its claim behind, and the claim is what blocks a restart.** `hamster reconcile`
+lists what is in flight; once you have decided a run is really gone, `hamster reconcile --release <n>`
+puts the issue back. Use the flag rather than editing the board by hand: the reset has two halves
+(status → Ready **and** clear the Owner), and an item left Ready with a live-looking Owner is skipped
+by the claim guard on every future run — the issue leaves the queue permanently, and nothing reports
+it. `reconcile` also flags Done items whose issue was reopened, which is the same class of drift from
+the other direction.
 
 ## The merge gate
 

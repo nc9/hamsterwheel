@@ -32,9 +32,14 @@ export const isCommand = (v: string): v is Command => (COMMANDS as readonly stri
  * `init`, `doctor` and `prune` never reach this path — they return earlier — so they are absent by
  * construction rather than by omission.
  */
-export const isReadOnlyInvocation = (command: Command, execute: boolean): boolean =>
+export const isReadOnlyInvocation = (
+  command: Command,
+  execute: boolean,
+  /** `reconcile --release <n>` is the one reconcile form that mutates the board. */
+  releaseIssue?: number,
+): boolean =>
   command === "plan" ||
-  command === "reconcile" ||
+  (command === "reconcile" && releaseIssue === undefined) ||
   command === "status" ||
   (command === "release" && !execute);
 
@@ -81,6 +86,12 @@ export const FLAG_SPECS: readonly FlagSpec[] = [
     arg: "<n>",
     desc: "target a specific Ready+eligible issue instead of the head of the queue",
     commands: ["once", "run"],
+  },
+  {
+    flag: "--release",
+    arg: "<n>",
+    desc: "release a stale claim: reset the issue to Ready AND clear its Owner (both halves)",
+    commands: ["reconcile"],
   },
   {
     flag: "--pr-only",
@@ -169,6 +180,8 @@ export type ParsedArgs = {
   dryRun: boolean;
   /** once/run: target a specific Ready+eligible issue instead of the head of the queue. */
   issue?: number;
+  /** reconcile: issue number whose stale claim to release. */
+  releaseIssue?: number;
   configPath?: string;
   /** init: board title (default "<repo-name> Loop"). */
   projectTitle?: string;
@@ -271,6 +284,14 @@ export const parseArgs = (argv: string[]): ParsedArgs => {
         const n = raw !== undefined && !raw.startsWith("-") ? Number(args[++i]) : Number.NaN;
         if (Number.isInteger(n) && n > 0) out.issue = n;
         else out.unknown.push(`--issue expects a positive integer (got ${JSON.stringify(raw)})`);
+        break;
+      }
+      case "--release": {
+        see("--release");
+        const raw = args[i + 1];
+        const n = raw !== undefined && !raw.startsWith("-") ? Number(args[++i]) : Number.NaN;
+        if (Number.isInteger(n) && n > 0) out.releaseIssue = n;
+        else out.unknown.push(`--release expects a positive integer (got ${JSON.stringify(raw)})`);
         break;
       }
       case "--config": {

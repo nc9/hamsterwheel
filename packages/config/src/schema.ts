@@ -95,6 +95,18 @@ export type Config = {
   review: { mode: ReviewMode; bot: string; blockingSeverityRe: RegExp };
   /** `[[human]]` rules — any hit parks the PR as Blocked: needs-human instead of auto-merging. */
   humanRules: HumanRule[];
+  /**
+   * Block an issue a person has already claimed — assigned to someone, commented on by anyone outside
+   * the org, or carrying `handsOffLabel` — instead of working it.
+   *
+   * On for anyone who does not opt out, because the failure it prevents is the expensive kind: the loop
+   * cannot see assignees or comments at all, so without this a volunteer's issue looks identical to an
+   * untouched one. `false` restores the old behaviour for a private board that would rather not spend
+   * the check.
+   */
+  communityGuard: boolean;
+  /** Label that permanently excludes an issue from the loop, whoever else has touched it. */
+  handsOffLabel: string;
   criteriaHeading: string;
   /**
    * `[scripts]` lifecycle table (Conductor-style). `setup` runs in the lane after every acquire —
@@ -484,6 +496,8 @@ export const parseConfig = (raw: unknown, opts: { home?: string } = {}): Config 
       ),
     },
     humanRules: readHumanRules(r, raw.human),
+    communityGuard: r.bool("community_guard", true),
+    handsOffLabel: r.str("hands_off_label", "loop:hands-off"),
     criteriaHeading: r.str("criteria_heading", "Acceptance Criteria"),
     scripts: readScripts(r, raw.scripts),
     smokeCmd: r.optStr("smoke_cmd"),

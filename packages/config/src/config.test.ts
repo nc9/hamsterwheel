@@ -307,3 +307,28 @@ describe("commit_signoff", () => {
     expect(() => parseConfig(withOver({ commit_signoff: "true" }), { home: "/h" })).toThrow();
   });
 });
+
+describe("community_guard", () => {
+  /**
+   * Defaults ON. The guard exists because the loop cannot see assignees or comments, so an issue a
+   * volunteer just claimed is indistinguishable from an untouched one — opt-in protection would only
+   * ever be enabled by someone who had already been bitten.
+   */
+  test("defaults to on, with the default hands-off label", () => {
+    const c = parseConfig(minimal(), { home: "/h" });
+    expect(c.communityGuard).toBe(true);
+    expect(c.handsOffLabel).toBe("loop:hands-off");
+  });
+
+  test("can be turned off, and the label renamed", () => {
+    const c = parseConfig(withOver({ community_guard: false, hands_off_label: "no-bot" }), {
+      home: "/h",
+    });
+    expect(c.communityGuard).toBe(false);
+    expect(c.handsOffLabel).toBe("no-bot");
+  });
+
+  test("rejects a non-boolean rather than coercing it to a disabled guard", () => {
+    expect(() => parseConfig(withOver({ community_guard: "false" }), { home: "/h" })).toThrow();
+  });
+});

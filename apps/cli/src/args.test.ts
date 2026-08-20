@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import { COMMANDS, isReadOnlyInvocation, parseArgs } from "./args.ts";
+import { COMMANDS, isReadOnlyInvocation, parseArgs, validateArgs } from "./args.ts";
 
 const argv = (...a: string[]) => ["bun", "hamsterwheel", ...a];
 
@@ -44,6 +44,20 @@ describe("parseArgs", () => {
     expect(parseArgs(argv("once", "--issue", "3.5")).issue).toBeUndefined();
   });
 
+  test("--release takes a positive integer, like --issue", () => {
+    expect(parseArgs(argv("reconcile", "--release", "108")).releaseIssue).toBe(108);
+    expect(parseArgs(argv("reconcile", "--release", "abc")).releaseIssue).toBeUndefined();
+    // A bare --release must not swallow the following flag as its value.
+    const a = parseArgs(argv("reconcile", "--release", "--json"));
+    expect(a.releaseIssue).toBeUndefined();
+    expect(a.json).toBe(true);
+  });
+
+  test("--release only applies to reconcile", () => {
+    expect(validateArgs(parseArgs(argv("run", "--release", "5"))).join()).toContain("--release");
+    expect(validateArgs(parseArgs(argv("reconcile", "--release", "5")))).toEqual([]);
+  });
+
   test("unknown flags and stray words are collected, not silently ignored", () => {
     expect(parseArgs(argv("plan", "--frobnicate")).unknown).toEqual(["--frobnicate"]);
     expect(parseArgs(argv("frobnicate")).unknown).toEqual(["frobnicate"]);
@@ -76,6 +90,12 @@ describe("isReadOnlyInvocation", () => {
   test("release reads without --execute and writes with it", () => {
     expect(isReadOnlyInvocation("release", false)).toBe(true);
     expect(isReadOnlyInvocation("release", true)).toBe(false);
+  });
+
+  /** `reconcile` reads, EXCEPT with --release <n>, which is the one form that mutates the board. */
+  test("reconcile --release is not read-only", () => {
+    expect(isReadOnlyInvocation("reconcile", false, 108)).toBe(false);
+    expect(isReadOnlyInvocation("reconcile", false, undefined)).toBe(true);
   });
 
   test("once and run always write, with or without --execute", () => {

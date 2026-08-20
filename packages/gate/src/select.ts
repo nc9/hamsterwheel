@@ -70,3 +70,57 @@ export const hasAcceptanceCriteria = (body: string, heading = "Acceptance Criter
  * as an ordinary work item, so match the intent, not one house style.
  */
 export const isEpicTitle = (title: string): boolean => /^epic\s*[:(]/i.test(title);
+
+/** Associations GitHub reports for someone inside the org. Everyone else is an outside contributor. */
+export const ORG_ASSOCIATIONS = new Set(["OWNER", "MEMBER", "COLLABORATOR"]);
+
+/** One comment, reduced to the two fields the guard reads. */
+export type IssueComment = { author: string; association: string };
+
+/** Why an issue is spoken for by a person. `who` is the login to name in the block reason. */
+export type HumanClaim = { kind: "assignee" | "comment" | "label"; who: string };
+
+/** GitHub App / Action identities comment as `something[bot]`; they are not people volunteering. */
+const isBotLogin = (login: string): boolean => /\[bot\]$/i.test(login) || login.startsWith("app/");
+
+/**
+ * Is a person already working this issue, or asking to?
+ *
+ * The loop reads an issue's title, body and labels — which is to say it cannot see the two places a
+ * human says "mine": the assignee field, and a comment. In a public repo the comment IS the signal,
+ * because a drive-by contributor has no write access and so cannot self-assign. Missing it is how a
+ * loop opened and merged a PR twenty-two minutes after someone volunteered for the same issue, having
+ * posted a plan of attack that matched what the loop went on to ship.
+ *
+ * Deliberately blunt: ANY comment from outside the org counts, including a bare "+1". A false positive
+ * costs a human a few seconds to wave the issue through; a false negative costs a contributor their
+ * afternoon and the project a contributor. On a private board every commenter is a MEMBER, so the guard
+ * is silent there and needs no repo-visibility check to stay out of the way.
+ */
+export const detectHumanClaim = (
+  assignees: string[],
+  comments: IssueComment[],
+  labels: string[] = [],
+  handsOffLabel?: string,
+): HumanClaim | null => {
+  if (handsOffLabel) {
+    const hit = labels.find((l) => l.toLowerCase() === handsOffLabel.toLowerCase());
+    if (hit) return { kind: "label", who: hit };
+  }
+  // An assignee is the strongest signal there is, whoever they are: someone with write access made a
+  // deliberate statement about who owns this.
+  const person = assignees.find((a) => !isBotLogin(a));
+  if (person) return { kind: "assignee", who: person };
+  const outside = comments.find(
+    (c) => !ORG_ASSOCIATIONS.has(c.association.toUpperCase()) && !isBotLogin(c.author),
+  );
+  return outside ? { kind: "comment", who: outside.author } : null;
+};
+
+/** One line explaining a claim, for the skip list and the board's blocked reason. */
+export const describeHumanClaim = (c: HumanClaim): string =>
+  c.kind === "assignee"
+    ? `assigned to @${c.who}`
+    : c.kind === "label"
+      ? `carries the \`${c.who}\` label`
+      : `@${c.who} commented from outside the org`;

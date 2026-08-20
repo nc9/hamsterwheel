@@ -39,6 +39,11 @@ export {
 } from "./prompts.ts";
 export {
   type SelectableIssue,
+  type IssueComment,
+  type HumanClaim,
+  ORG_ASSOCIATIONS,
+  detectHumanClaim,
+  describeHumanClaim,
   PRIORITY_RANK,
   SIZE_RANK,
   UNKNOWN_SIZE_RANK,

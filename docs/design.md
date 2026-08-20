@@ -48,11 +48,32 @@ Ready requires the body to contain (else → Blocked: needs-criteria):
 ## Selection (per tick)
 
 1. Board query: Status == Ready.
-2. Drop items with open deps/parents (leave them Ready; they self-enable when the dep closes).
-3. Sort: Priority (P0→P3) → Size (smaller first, fast wins) → age (oldest first).
-4. Take head; none → idle poll (notify when the queue is empty and nothing is in flight).
+2. Drop items a **person** has claimed — see "Community guard" below.
+3. Drop items with open deps/parents (leave them Ready; they self-enable when the dep closes).
+4. Sort: Priority (P0→P3) → Size (smaller first, fast wins) → age (oldest first).
+5. Take head; none → idle poll (notify when the queue is empty and nothing is in flight).
 
 Cross-check issue state, not just board status: items linger in Ready after a merged PR closed them, and working one burns a session redoing shipped work. Every eligibility rule must also be visible in a read-only `plan` that prints WHY each excluded issue was excluded — a silent eligibility failure (a mistyped criteria heading) looks exactly like an empty backlog, which is the worst failure mode the loop has.
+
+### Community guard
+
+An issue a person has claimed is not the loop's to take. Three signals, any one of which parks it as Blocked: needs-human (`community_guard = true`, the default):
+
+- an **assignee** who is not a bot — someone with write access made a deliberate statement about ownership;
+- a **comment from outside the org** (author association not OWNER/MEMBER/COLLABORATOR, login not `*[bot]`);
+- the **`hands_off_label`** (`loop:hands-off` by default), which excludes an issue permanently.
+
+This exists because of a real incident, and the shape of that incident is the argument for the design. A drive-by contributor commented "I'd like to work on this" with an accurate plan of attack; twenty-two minutes later the loop claimed the same issue, and twenty-five minutes after that it had merged a PR implementing essentially that plan. Nothing in the selection path could see the comment: the loop read an issue's title, body and labels, which is to say it was blind to both places a human says "mine".
+
+Notice that the comment is the load-bearing signal, not the assignee. A contributor without write access **cannot** self-assign, so on a public repo the comment is the only way they can speak.
+
+The check is deliberately blunt — a bare "+1" blocks the issue. A false positive costs a maintainer a few seconds to wave it through; a false negative costs a contributor their afternoon and the project a contributor. On a private board every commenter is in-org, so the guard is silent there without needing to know anything about repo visibility.
+
+Two placements, because one is not enough: at queue build (the whole Ready set) and again immediately before the claim. In wave mode a queue can be minutes or hours old by the time a lane reaches an item, and "someone volunteered while we were busy" is precisely the case worth catching late. The re-check fails OPEN on a network error — a lookup failure must not stall the loop, and the same check already ran once.
+
+`assignees` and `comments` ride along on the `gh issue view` call selection already makes, so the guard costs no extra API request. The claim-time re-check is one call per claim, not per board item.
+
+The loop does **not** comment on an issue it parks this way. The maintainer needs to know; the volunteer does not need a bot posting into the thread they just volunteered in.
 
 ## Per-issue pipeline
 
@@ -112,7 +133,8 @@ are pattern-classified run-fatal so a quota wall cannot Block every item in turn
 - Session crash/timeout → reap: no PR → salvage + back to Ready; PR open → stays In Review (resumable). The next claim of that issue STARTS AT the salvage branch rather than at the base, and the implement prompt is told so — salvage that is never read back means a killed run's work is re-derived from scratch on every retry.
 - Implement session ended without a PR url on its last line → before declaring failure, ask GitHub whether an open PR exists for the branch. The session's narration is not the authority on whether it opened a PR; an agent that did the work and then signed off with a summary is otherwise indistinguishable from one that crashed.
 - Merging a DRAFT PR is impossible, and that check runs last — the gate marks a draft ready for review before merging, so a full passing gate is not discarded at the final API call.
-- Driver restart → reconcile from repo state, never from memory: In Progress/In Review with no live session → resume from the PR if open, else reset to Ready. Idempotent by issue #.
+- Driver restart → reconcile from repo state, never from memory: In Progress/In Review with no live session → resume from the PR if open, else reset to Ready. Idempotent by issue #. `hamster reconcile` reports; `hamster reconcile --release <n>` executes the decision once a human has made it. The release is a single verb because it has TWO halves — Status→Ready **and** clear the Owner — and doing half of it leaves an item that looks Ready but is skipped by the claim guard on every future run, leaking the issue out of the queue permanently and silently. `hamster status` is what tells you a driver died at all: a stale heartbeat is measurable, whereas a long implement phase and a wedged one look identical in the run log.
+- A Done item whose issue was REOPENED is drift the board cannot see: reopening is how a human says "not actually finished", and nothing moves the item back. `reconcile` reports these; it does not fix them, because only the person who reopened it knows which way it should go.
 - Driver killed mid-gate with a PR open: do NOT re-run the loop for that issue — finish the gate manually in the loop's order (see CLAUDE.md ops lessons).
 - Notify on every gate hit + empty queue.
 
@@ -142,7 +164,7 @@ colliding generated sequences (migration numbers etc.) on the second merge also 
 
 ## Config (`hamsterwheel.toml`)
 
-repo slug · project board (field + option NAMES, never hardcoded) · base branch · branch prefix · review bot name + blocking-severity regex · `[[human]]` rules (paths/labels) · `[scripts]` setup · worktree lanes · smoke/deploy hooks · allowed tools · runner+model+effort policy per role (strong/cheap tier pairs, flat overrides, validated label override) · session timeout · CI timeout · max review rounds · max iterations.
+repo slug · project board (field + option NAMES, never hardcoded) · base branch · branch prefix · review bot name + blocking-severity regex · `[[human]]` rules (paths/labels) · community guard + hands-off label · `[scripts]` setup · worktree lanes · smoke/deploy hooks · allowed tools · runner+model+effort policy per role (strong/cheap tier pairs, flat overrides, validated label override) · session timeout · CI timeout · max review rounds · max iterations.
 
 ## Observability
 

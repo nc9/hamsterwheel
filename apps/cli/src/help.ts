@@ -122,13 +122,18 @@ export const COMMAND_DOCS: Record<Command, CommandDoc> = {
   },
   reconcile: {
     summary: "report in-flight items with no live session behind them",
-    usage: "hamster reconcile [--config <path>] [--json]",
+    usage: "hamster reconcile [--release <n>] [--config <path>] [--json]",
     description: [
       "Lists everything In Progress / In Review so a human can verify a live run actually owns it",
-      "(the Owner field), and reset stale claims to Ready. Read-only: reconciliation decisions after a",
-      "crashed driver are a human's to make.",
+      "(the Owner field), plus any Done item whose issue has been REOPENED — the board cannot see a",
+      "reopen, so those sit Done forever and never return to the queue.",
+      "",
+      "Read-only by default: reconciliation decisions after a crashed driver are a human's to make.",
+      "--release <n> executes that decision once made. It resets the item to Ready AND clears the",
+      "Owner — both halves, because an item left Ready with a live-looking Owner is skipped by the",
+      "claim guard on every future run, silently leaking the issue out of the queue for good.",
     ],
-    json: `{ ok, command: "reconcile", inflight: [{number, status, owner}] }`,
+    json: `{ ok, command: "reconcile", inflight: [{number, status, owner}], doneButOpen: [n], released? }`,
     exitCodes: [
       ["0", "printed (in-flight items are not errors)"],
       ["1", "config/board unreachable"],

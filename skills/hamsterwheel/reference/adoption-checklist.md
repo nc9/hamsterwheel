@@ -94,6 +94,24 @@ Two consequences to settle **before** writing those issues, not after:
   goes red until someone regenerates and re-points it. Decide who does that and when. Batched, once
   per wave, is fine; unowned is not.
 
+## 4a. On a PUBLIC repo, read the comments before promoting anything to Ready
+
+The community guard (`community_guard`, on by default) parks any issue with a non-bot assignee, a
+comment from outside the org, or the `loop:hands-off` label. It is doing your triage for you, but only
+at the moment the loop looks — and by then you have already decided the issue was yours to automate.
+
+Two setup steps make the guard useful rather than merely correct:
+
+1. **Create the `loop:hands-off` label** (or point `hands_off_label` at one you have). Without it the
+   only way to permanently exclude an issue is to leave it off the board, which loses the tracking.
+2. **Decide who watches for volunteers.** The guard blocks the issue on the board and says nothing on
+   the issue itself — deliberately, since a bot replying to someone who just offered to help is worse
+   than silence. So a parked issue is only actionable if somebody reads `plan` output or the board.
+
+If your board is private and your repo is public, note that these are different populations: everyone
+who can comment is outside the org, and the guard is what stands between a volunteer and a bot
+out-racing them.
+
 ## 4b. If the repo enforces DCO, set `commit_signoff` — **SILENT until the first PR**
 
 A DCO check rejects per **commit**, and its failure names the commit, not your config — so it reads

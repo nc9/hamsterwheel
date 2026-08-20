@@ -165,7 +165,7 @@ export const main = async (argv: string[]): Promise<number> => {
     }
 
     const ctx = await loadBoardCtx(gh, cfg);
-    const readOnly = isReadOnlyInvocation(args.command, args.execute);
+    const readOnly = isReadOnlyInvocation(args.command, args.execute, args.releaseIssue);
     // Tee the run log so --json can replay the exact structured events the .jsonl file records.
     const events: Record<string, unknown>[] = [];
     // Repo-scoped: a flat global directory made "the current run" unfindable the moment a second
@@ -245,7 +245,7 @@ export const main = async (argv: string[]): Promise<number> => {
         return verdict.state === "stale" ? 1 : 0;
       }
       case "reconcile": {
-        const report = await reconcile(deps);
+        const report = await reconcile(deps, args.releaseIssue);
         if (args.json) emit({ ...report });
         else renderReconcile(report, cfg, log);
         return 0;
